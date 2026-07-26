@@ -145,6 +145,21 @@ const SCHEMA = `
     key TEXT PRIMARY KEY,
     completed_at INTEGER NOT NULL
   );
+
+  -- Durable record for the "Finite Forever" space: deliberately NOT a FK to
+  -- spaces(id) and NOT cascade-deleted — this log must remain readable even
+  -- after the space/project it describes is reset or removed ("the space
+  -- forgets, the ritual remembers").
+  CREATE TABLE IF NOT EXISTS ritual_log (
+    id TEXT PRIMARY KEY,
+    space_id TEXT NOT NULL,
+    actor_label TEXT NOT NULL DEFAULT '',
+    action TEXT NOT NULL,
+    target_label TEXT NOT NULL DEFAULT '',
+    detail TEXT NOT NULL DEFAULT '{}',
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_ritual_log_space ON ritual_log(space_id, created_at);
 `
 
 // Patch a DatabaseSync instance to expose the better-sqlite3 surface used

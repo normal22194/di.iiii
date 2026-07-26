@@ -580,5 +580,10 @@ function registerProjectRoutes(router, {
 }
 
 module.exports = {
-  registerProjectRoutes
+  registerProjectRoutes,
+  // Exported so other route modules touching the same project documents
+  // (finiteForeverRoutes.js's advance-drift sweep) serialize against this
+  // route's writes instead of racing it with an independent lock map — same
+  // reasoning as index.js's sharedSpaceOpsLock for spaces.
+  withProjectLock
 }

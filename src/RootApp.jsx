@@ -16,6 +16,7 @@ const SeedApp = lazy(() => import('./seed/SeedApp.jsx'))
 const LandingPage = lazy(() => import('./landing/LandingPage.jsx'))
 const StudioApp = lazy(() => import('./studio/StudioApp.jsx'))
 const WccExperience = lazy(() => import('./wcc/WccExperience.jsx'))
+const FiniteForeverExperience = lazy(() => import('./finiteforever/FiniteForeverExperience.jsx'))
 const WikiPage = lazy(() => import('./wiki/WikiPage.jsx'))
 // AuthGate pulls in MUI + AccountButton -- lazy so public routes (landing,
 // wiki, any public space) that never render a gate don't pay for MUI in
@@ -94,6 +95,28 @@ function WccSurfaceRoute({ mode }) {
     }
 
     return <ProtectedSurface requiredSpaceId="wcc">{content}</ProtectedSurface>
+}
+
+// finite-forever is a real space like any other — same server-verified
+// isPublic gate as wcc, just a single route (no landing/scene split).
+function FiniteForeverSurfaceRoute() {
+    const { isPublic, loading } = useSpacePublicFlag('finite-forever')
+
+    if (loading) {
+        return <RouteSurfaceFallback label="Loading" detail="" />
+    }
+
+    const content = (
+        <Suspense fallback={<RouteSurfaceFallback label="Loading" detail="" />}>
+            <FiniteForeverExperience />
+        </Suspense>
+    )
+
+    if (isPublic) {
+        return content
+    }
+
+    return <ProtectedSurface requiredSpaceId="finite-forever">{content}</ProtectedSurface>
 }
 
 function AppRouter() {
@@ -185,6 +208,13 @@ function AppRouter() {
         && (pathSegments.length === 1 || (pathSegments.length === 2 && pathSegments[1] === 'scene'))
     if (isWccSurface) {
         return <WccSurfaceRoute mode={pathSegments[1] === 'scene' ? 'scene' : 'landing'} />
+    }
+
+    const isFiniteForeverSurface = appState.spaceId === 'finite-forever'
+        && appState.page !== APP_PAGE_PREFERENCES
+        && pathSegments.length === 1
+    if (isFiniteForeverSurface) {
+        return <FiniteForeverSurfaceRoute />
     }
 
     if (appState.projectSlugSegment) {

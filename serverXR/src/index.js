@@ -35,8 +35,10 @@ const { ensureDir, readJson, writeJson } = require('./jsonStore')
 const { initializeSocket } = require('./socketHandlers')
 const { initializeMesh } = require('./meshHub')
 const { loadReleaseInfo } = require('./releaseInfo')
-const { registerProjectRoutes } = require('./routes/projectRoutes')
+const { registerProjectRoutes, withProjectLock } = require('./routes/projectRoutes')
 const { registerSpaceRoutes } = require('./routes/spaceRoutes')
+const { registerFiniteForeverRoutes } = require('./routes/finiteForeverRoutes')
+const { appendRitualLog, listRitualLog } = require('./ritualLogStore')
 const { createKeyedLock } = require('./asyncLock')
 const { createSessionDbSync } = require('./sessionDbSync')
 const { registerInscriptionRoutes } = require('./routes/inscriptionRoutes')
@@ -1582,6 +1584,22 @@ registerProjectRoutes(router, {
   writeProjectDocument
 })
 
+const { runDriftSweep: runFiniteForeverDriftSweep } = registerFiniteForeverRoutes(router, {
+  requireAdminWrite,
+  resolveProjectContext,
+  readProjectDocument,
+  writeProjectDocument,
+  applyProjectOps,
+  appendProjectOps,
+  upsertProjectMeta,
+  broadcastProjectLiveEvent,
+  maxOpHistory: MAX_OP_HISTORY,
+  spacesDir: SPACES_DIR,
+  withProjectLock,
+  appendRitualLog,
+  listRitualLog
+})
+
 router.use('/api/sync/spaces/:spaceId', syncLimiter)
 
 registerSyncRoutes(router, {
@@ -1660,6 +1678,15 @@ initStorage()
     setInterval(() => {
       pruneSpaces().catch((error) => logger.warn('Failed to prune spaces', error))
     }, 1000 * 60 * 30)
+    // Finite Forever's drift sweep — recomputes unclaimed marks' appearance
+    // from real elapsed time since placement (see finiteForeverRoutes.js),
+    // reaching residue ~12 real hours after placement on its own, with no
+    // admin action required. 'ritual' matches FINITE_FOREVER_PROJECT_ID in
+    // src/finiteforever/permanence.js. No-ops harmlessly if that project
+    // doesn't exist on this server (e.g. a fork that hasn't seeded it).
+    setInterval(() => {
+      runFiniteForeverDriftSweep('ritual').catch((error) => logger.warn('Failed to run Finite Forever drift sweep', error))
+    }, 1000 * 60 * 10)
     // Daily scene snapshot of the open space — vandalism insurance (admin
     // restores via POST /api/spaces/:id/restore-snapshot).
     snapshotOpenSpace().catch((error) => logger.warn('Failed to snapshot open space', error))

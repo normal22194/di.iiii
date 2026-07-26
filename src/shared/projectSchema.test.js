@@ -85,6 +85,45 @@ describe('projectSchema', () => {
         expect(plain.entities[0].components.timeline).toBeUndefined()
     })
 
+    it('round-trips an unknown entity component block and workspaceState field unchanged (additive-schema guard)', () => {
+        // Finite Forever (src/finiteforever/) stores its drift/permanence state
+        // in components.permanence and workspaceState.permanencePool without
+        // any change to this file — this test guards the assumption that
+        // makes that safe: normalizeEntity/normalizeWorkspaceState must keep
+        // spreading unknown keys through wholesale, or that additive-only
+        // design (docs/architecture/PROJECT_SURFACES.md) silently breaks.
+        const permanence = {
+            status: 'permanent',
+            stage: 2,
+            claimedBy: 'someone',
+            claimedAt: 12345,
+            baseAppearance: { opacity: 1 },
+            baseScale: [1, 1, 1],
+            revokedFrom: null
+        }
+        const document = normalizeProjectDocument({
+            entities: [{ type: 'box', components: { permanence } }],
+            workspaceState: { permanencePool: { total: 12, claimed: 3 } }
+        })
+
+        expect(document.entities[0].components.permanence).toEqual(permanence)
+        expect(document.workspaceState.permanencePool).toEqual({ total: 12, claimed: 3 })
+
+        const updated = applyProjectOps(document, [{
+            type: 'updateComponent',
+            payload: {
+                entityId: document.entities[0].id,
+                component: 'permanence',
+                patch: { status: 'drifting', stage: 3 }
+            }
+        }])
+        expect(updated.entities[0].components.permanence).toEqual({
+            ...permanence,
+            status: 'drifting',
+            stage: 3
+        })
+    })
+
     it('migrates v3 old-shape nodes and edges into v4 new-shape', () => {
         const document = normalizeProjectDocument({
             version: 3,

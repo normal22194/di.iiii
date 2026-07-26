@@ -1,4 +1,4 @@
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Suspense, forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { Grid, Text, Billboard } from '@react-three/drei'
@@ -295,7 +295,7 @@ function EntityVisual({ entity, assetMap }) {
 // Idle motion layered on top of the authored transform -- gates and ground
 // stay put (they're architecture), flying pieces get a real flight path,
 // everything else gets a gentle bob + slow spin so the room feels alive.
-function AnimatedEntity({ entity, assetMap, childMap = null }) {
+function AnimatedEntity({ entity, assetMap, childMap = null, onEntityDoubleClick = null }) {
     const groupRef = useRef(null)
     const basePos = entity.components?.transform?.position || [0, 0, 0]
     const baseRot = entity.components?.transform?.rotation || [0, 0, 0]
@@ -329,12 +329,18 @@ function AnimatedEntity({ entity, assetMap, childMap = null }) {
 
     const children = childMap?.get(entity.id) || []
     return (
-        <group ref={groupRef} position={basePos} rotation={baseRot} scale={baseScale}>
+        <group
+            ref={groupRef}
+            position={basePos}
+            rotation={baseRot}
+            scale={baseScale}
+            onDoubleClick={onEntityDoubleClick ? (e) => { e.stopPropagation(); onEntityDoubleClick(entity) } : undefined}
+        >
             <Suspense fallback={null}>
                 <EntityVisual entity={entity} assetMap={assetMap} />
             </Suspense>
             {children.map((child) => (
-                <AnimatedEntity key={child.id} entity={child} assetMap={assetMap} childMap={childMap} />
+                <AnimatedEntity key={child.id} entity={child} assetMap={assetMap} childMap={childMap} onEntityDoubleClick={onEntityDoubleClick} />
             ))}
         </group>
     )
@@ -1247,15 +1253,19 @@ function HubDecor({ zones }) {
     )
 }
 
-export default function LiveProjectScene({
+const LiveProjectScene = forwardRef(function LiveProjectScene({
     projectId,
     interactive = true,
     showChrome = true,
     showEntities = true,
     onExit = null,
     exitLabel = '← Exit',
-    title = ''
-}) {
+    title = '',
+    // Opt-in: undefined for every existing caller (WCC, PublicProjectViewer),
+    // so double-click keeps doing nothing there. Finite Forever uses it to
+    // select an already-placed mark and reopen its edit menu.
+    onEntityDoubleClick = null
+}, ref) {
     const { doc, loadError, retryDocument } = useLiveProjectDocument(projectId)
     const xr = useXrAr()
     const [nearestLabel, setNearestLabel] = useState(null)
@@ -1285,6 +1295,16 @@ export default function LiveProjectScene({
     const arTouchElRef = useRef(null)
     const isArActive = xr.isArModeActive && xr.isXrPresenting
     const playerRef = useRef({ x: 0, z: 6, yaw: Math.PI, pitch: 0, altY: EYE_HEIGHT })
+    // Lets an embedding parent (e.g. Finite Forever's placement UI) place new
+    // entities relative to where the participant is standing, without a full
+    // raycast-picking system.
+    useImperativeHandle(ref, () => ({
+        getPlayerGroundPosition: () => ({
+            x: playerRef.current.x,
+            z: playerRef.current.z,
+            yaw: playerRef.current.yaw
+        })
+    }), [])
     const { canvasKey, contextLost, bindContextGuard, restoreContext } = useWebglContextGuard()
     // Dev-only observability hook for scripts/input-check.mjs: input-contract
     // probes assert on real walker state instead of guessing from screenshots.
@@ -1438,7 +1458,7 @@ export default function LiveProjectScene({
                 <AmbientField center={center} />
                 {showEntities && rootEntities.map((entity) => (
                     <SceneEntityErrorBoundary key={entity.id} resetKey={entity.id}>
-                        <AnimatedEntity entity={entity} assetMap={assetMap} childMap={entityChildMap} />
+                        <AnimatedEntity entity={entity} assetMap={assetMap} childMap={entityChildMap} onEntityDoubleClick={onEntityDoubleClick} />
                     </SceneEntityErrorBoundary>
                 ))}
                 {showEntities && gateEntity ? <GateGlow entity={gateEntity} /> : null}
@@ -1595,4 +1615,6 @@ export default function LiveProjectScene({
             )}
         </>
     )
-}
+})
+
+export default LiveProjectScene
