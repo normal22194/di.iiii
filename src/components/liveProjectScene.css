@@ -1,3 +1,11 @@
+.live-scene-marquee {
+    position: absolute;
+    border: 1px solid #9fd8ff;
+    background: rgba(159, 216, 255, 0.15);
+    pointer-events: none;
+    z-index: 6;
+}
+
 .live-scene-chrome {
     position: absolute;
     top: 0;

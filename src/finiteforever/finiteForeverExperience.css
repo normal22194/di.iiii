@@ -7,6 +7,12 @@
     overflow: hidden;
 }
 
+/* Clear "you're in a different mode now" cue — a mode needs an unmistakable
+   on/off state the way a window's mere presence already provides for free. */
+.ff-experience--admin-mode {
+    box-shadow: inset 0 0 0 2px rgba(255, 209, 102, 0.55);
+}
+
 .ff-overlay {
     position: absolute;
     top: 16px;
@@ -33,6 +39,35 @@
 .ff-overlay__actions {
     display: flex;
     gap: 8px;
+}
+
+.ff-overlay__left {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+}
+
+.ff-identity-chip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 10px;
+    border-radius: 8px;
+    background: rgba(8, 10, 14, 0.6);
+    color: #9aa4b2;
+    font: 11px/1.3 system-ui, sans-serif;
+    backdrop-filter: blur(6px);
+}
+
+.ff-identity-chip__switch {
+    border: none;
+    background: none;
+    color: #9fd8ff;
+    font: 11px/1 system-ui, sans-serif;
+    text-decoration: underline;
+    cursor: pointer;
+    padding: 0;
 }
 
 .ff-hud {
@@ -130,14 +165,14 @@
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
-    width: 340px;
+    width: 320px;
     min-width: 260px;
     min-height: 200px;
     max-width: min(90vw, 520px);
     max-height: 90vh;
     resize: both;
     overflow: auto;
-    border-radius: 14px;
+    border-radius: 12px;
     background: rgba(10, 12, 16, 0.94);
     box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
     z-index: 40;
@@ -146,9 +181,9 @@
 .ff-draggable__header {
     display: flex;
     align-items: center;
-    justify-content: center;
-    gap: 8px;
-    padding: 8px 12px;
+    justify-content: space-between;
+    gap: 6px;
+    padding: 6px 6px 6px 10px;
     cursor: grab;
     touch-action: none;
     user-select: none;
@@ -156,62 +191,196 @@
     position: sticky;
     top: 0;
     background: inherit;
-    border-radius: 14px 14px 0 0;
+    border-radius: 12px 12px 0 0;
 }
 
 .ff-draggable__header:active {
     cursor: grabbing;
 }
 
+.ff-draggable__header-main {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    overflow: hidden;
+}
+
 .ff-draggable__grip {
     color: #6b7280;
-    font-size: 11px;
-    letter-spacing: 2px;
+    font-size: 10px;
+    letter-spacing: 1px;
+    flex: none;
 }
 
 .ff-draggable__title {
     color: #9aa4b2;
-    font: 11px/1 system-ui, sans-serif;
+    font: 10px/1 system-ui, sans-serif;
     text-transform: uppercase;
-    letter-spacing: 0.06em;
+    letter-spacing: 0.05em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.ff-draggable__close {
+    flex: none;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: #9aa4b2;
+    font-size: 11px;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.ff-draggable__close:hover {
+    background: rgba(255, 120, 120, 0.18);
+    color: #ff9d9d;
 }
 
 .ff-draggable__body {
-    padding: 18px 22px 22px;
+    padding: 10px 12px 12px;
 }
 
 .ff-claim-prompt {
     color: #e8ecf1;
     text-align: center;
+    font-size: 12px;
 }
 
-.ff-claim-prompt__question {
-    font: 500 18px/1.4 system-ui, sans-serif;
+.ff-claim-prompt__meta {
+    display: flex;
+    align-items: baseline;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 6px;
     margin: 0 0 8px;
 }
 
+.ff-claim-prompt__placed-by {
+    font: 10px/1 system-ui, sans-serif;
+    opacity: 0.55;
+}
+
+.ff-editable-name {
+    font: 600 13px/1.3 system-ui, sans-serif;
+    cursor: text;
+    border-bottom: 1px dashed rgba(255, 255, 255, 0.25);
+}
+
+.ff-editable-name__input {
+    font: 600 13px/1.3 system-ui, sans-serif;
+    max-width: 160px;
+    padding: 2px 6px;
+    border-radius: 5px;
+    border: 1px solid rgba(159, 216, 255, 0.5);
+    background: rgba(255, 255, 255, 0.05);
+    color: #e8ecf1;
+}
+
+.ff-editable-name__input:focus {
+    outline: none;
+}
+
+.ff-claim-prompt__question {
+    font: 500 13px/1.3 system-ui, sans-serif;
+    margin: 0 0 5px;
+}
+
 .ff-claim-prompt__countdown {
-    font: 500 12px/1.3 system-ui, sans-serif;
+    font: 500 11px/1.25 system-ui, sans-serif;
     color: #ffd9b0;
     opacity: 0.9;
-    margin: 0 0 6px;
+    margin: 0 0 4px;
     letter-spacing: 0.01em;
 }
 
 .ff-claim-prompt__detail {
-    font: 13px/1.5 system-ui, sans-serif;
+    font: 11px/1.4 system-ui, sans-serif;
     opacity: 0.75;
-    margin: 0 0 18px;
+    margin: 0 0 10px;
 }
 
 .ff-claim-prompt__edit {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     justify-content: center;
-    gap: 10px;
-    margin: 0 0 18px;
-    padding-bottom: 16px;
+    gap: 6px;
+    margin: 0 0 10px;
+    padding-bottom: 10px;
     border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.ff-text-control {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 4px;
+    margin: 0 0 10px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    text-align: left;
+}
+
+.ff-text-control__label {
+    font: 10px/1 system-ui, sans-serif;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    opacity: 0.6;
+}
+
+.ff-text-control input[type='text'] {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 5px 7px;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: rgba(255, 255, 255, 0.05);
+    color: #e8ecf1;
+    font: 12px/1.3 system-ui, sans-serif;
+}
+
+.ff-text-control input[type='text']:focus {
+    outline: none;
+    border-color: rgba(159, 216, 255, 0.5);
+}
+
+.ff-opacity {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 10px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.ff-opacity__label {
+    font: 10px/1 system-ui, sans-serif;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    opacity: 0.6;
+    flex: none;
+}
+
+.ff-opacity input[type='range'] {
+    flex: 1;
+    accent-color: #9fd8ff;
+}
+
+.ff-opacity__value {
+    flex: none;
+    min-width: 32px;
+    text-align: right;
+    font: 11px/1 ui-monospace, monospace;
+    opacity: 0.85;
 }
 
 .ff-claim-prompt__color-label {
@@ -236,45 +405,85 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 8px;
-    margin: 0 0 18px;
-    padding-bottom: 16px;
+    gap: 6px;
+}
+
+.ff-section {
+    margin: 0 0 8px;
     border-bottom: 1px solid rgba(255, 255, 255, 0.1);
 }
 
-.ff-move__label {
-    font: 12px/1 system-ui, sans-serif;
+.ff-section__toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    padding: 0 0 8px;
+    border: none;
+    background: none;
+    color: #e8ecf1;
+    font: 11px/1 system-ui, sans-serif;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.04em;
+    opacity: 0.75;
+    cursor: pointer;
+    text-align: left;
+}
+
+.ff-section__toggle:hover {
+    opacity: 1;
+    color: #9fd8ff;
+}
+
+.ff-section__chevron {
+    font-size: 9px;
+    width: 8px;
+}
+
+.ff-section__body {
+    padding-bottom: 10px;
+}
+
+.ff-claim-prompt__delete {
+    width: 100%;
+    margin-top: 4px;
+}
+
+.ff-move__label {
+    font: 10px/1.2 system-ui, sans-serif;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
     opacity: 0.6;
     color: #e8ecf1;
 }
 
 .ff-move__axes {
     display: flex;
-    gap: 14px;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px;
 }
 
 .ff-move__axis {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 4px;
 }
 
 .ff-move__axis-label {
     color: #9fd8ff;
-    font: 600 12px/1 system-ui, sans-serif;
-    width: 12px;
+    font: 600 11px/1 system-ui, sans-serif;
+    width: 10px;
 }
 
 .ff-move__step {
-    width: 26px;
-    height: 26px;
+    width: 20px;
+    height: 20px;
     padding: 0;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    font-size: 15px;
+    font-size: 12px;
     line-height: 1;
 }
 
@@ -308,7 +517,30 @@
 .ff-claim-prompt__actions {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 6px;
+}
+
+/* Scoped down-sizing for buttons/inputs inside the compact edit panel only —
+   the shared .ff-button/.ff-move__value rules stay full-size for the rest
+   of the overlay (placement panel, pool HUD, ritual log). */
+.ff-claim-prompt .ff-button {
+    padding: 5px 9px;
+    font-size: 11px;
+}
+
+.ff-claim-prompt .ff-move__value {
+    min-width: 26px;
+    font-size: 11px;
+}
+
+.ff-claim-prompt .ff-claim-prompt__color-label {
+    gap: 4px;
+    font-size: 11px;
+}
+
+.ff-claim-prompt .ff-claim-prompt__color-label input[type='color'] {
+    width: 20px;
+    height: 20px;
 }
 
 .ff-ritual-log {
@@ -390,6 +622,122 @@
     100% { opacity: 0; }
 }
 
+.ff-import {
+    text-align: center;
+}
+
+.ff-import__hint {
+    color: #9aa4b2;
+    font: 11px/1.4 system-ui, sans-serif;
+    margin: 0 0 10px;
+}
+
+.ff-import__drop {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    min-height: 90px;
+    padding: 16px;
+    box-sizing: border-box;
+    border: 1px dashed rgba(255, 255, 255, 0.25);
+    border-radius: 10px;
+    background: none;
+    color: #e8ecf1;
+    font: 12px/1.4 system-ui, sans-serif;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.ff-import__drop:disabled {
+    opacity: 0.6;
+    cursor: default;
+}
+
+.ff-import__drop:hover,
+.ff-import__drop--active {
+    background: rgba(159, 216, 255, 0.08);
+    border-color: rgba(159, 216, 255, 0.5);
+}
+
+.ff-import__error {
+    margin: 10px 0 0;
+    color: #ff9d9d;
+    font: 11px/1.4 system-ui, sans-serif;
+}
+
+.ff-entry-gate {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #06080a;
+    z-index: 100;
+}
+
+.ff-entry-gate__card {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: min(360px, 90vw);
+    padding: 28px 26px;
+    border-radius: 14px;
+    background: rgba(16, 18, 24, 0.92);
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+    text-align: center;
+}
+
+.ff-entry-gate__title {
+    color: #e8ecf1;
+    font: 600 20px/1.1 system-ui, sans-serif;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-bottom: 4px;
+}
+
+.ff-entry-gate__line {
+    color: #c7cfda;
+    font: 13px/1.5 system-ui, sans-serif;
+    margin: 0;
+}
+
+.ff-entry-gate__input {
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    background: rgba(255, 255, 255, 0.05);
+    color: #e8ecf1;
+    font: 14px/1.3 system-ui, sans-serif;
+    text-align: center;
+}
+
+.ff-entry-gate__input:focus {
+    outline: none;
+    border-color: rgba(159, 216, 255, 0.6);
+}
+
+.ff-entry-gate__visibility {
+    display: flex;
+    justify-content: center;
+    gap: 18px;
+    color: #e8ecf1;
+    font: 12px/1 system-ui, sans-serif;
+}
+
+.ff-entry-gate__visibility label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+}
+
+.ff-entry-gate__note {
+    color: #9aa4b2;
+    font: 11px/1.5 system-ui, sans-serif;
+    margin: 0;
+}
+
 .ff-error {
     position: absolute;
     bottom: 90px;
@@ -401,6 +749,188 @@
     border-radius: 8px;
     font: 12px/1.3 system-ui, sans-serif;
     z-index: 25;
+}
+
+.ff-advanced {
+    color: #e8ecf1;
+    text-align: left;
+    font-size: 12px;
+}
+
+/* Admin mode: a fixed HUD strip, not a floating window — no drag/resize/
+   close button, matches PoolHud/the identity chip's "just there while
+   active" treatment rather than the DraggablePanel windows. */
+.ff-admin-mode {
+    position: fixed;
+    top: 90px;
+    right: 16px;
+    width: 220px;
+    max-height: calc(100vh - 110px);
+    overflow-y: auto;
+    padding: 12px;
+    border-radius: 10px;
+    background: rgba(10, 12, 16, 0.9);
+    border: 1px solid rgba(255, 209, 102, 0.4);
+    color: #e8ecf1;
+    text-align: left;
+    font-size: 12px;
+    z-index: 20;
+}
+
+.ff-admin-mode__badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: rgba(255, 209, 102, 0.18);
+    color: #ffd166;
+    font: 600 10px/1.6 system-ui, sans-serif;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 8px;
+}
+
+.ff-admin-mode__hint,
+.ff-admin-mode__note {
+    font: 10px/1.4 system-ui, sans-serif;
+    opacity: 0.55;
+    margin: 0 0 8px;
+}
+
+.ff-admin-mode__count {
+    font: 600 11px/1 system-ui, sans-serif;
+    opacity: 0.8;
+    margin: 0 0 4px;
+}
+
+.ff-admin-mode__list {
+    list-style: none;
+    margin: 0 0 8px;
+    padding: 0;
+    max-height: 160px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.ff-admin-mode__list li {
+    padding: 4px 6px;
+    border-radius: 5px;
+    background: rgba(255, 255, 255, 0.05);
+    font: 11px/1.3 system-ui, sans-serif;
+}
+
+.ff-advanced__row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin: 0 0 10px;
+}
+
+.ff-advanced__row:last-child {
+    margin-bottom: 0;
+}
+
+.ff-advanced__label {
+    font: 10px/1 system-ui, sans-serif;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    opacity: 0.6;
+    flex: none;
+}
+
+.ff-pages {
+    margin-top: 6px;
+    padding-top: 12px;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.ff-pages__tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin: 0 0 10px;
+}
+
+.ff-pages__tab {
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: rgba(255, 255, 255, 0.05);
+    color: #e8ecf1;
+    font: 11px/1 system-ui, sans-serif;
+    cursor: pointer;
+}
+
+.ff-pages__tab--selected {
+    border-color: #9fd8ff;
+    background: #9fd8ff;
+    color: #0a0c10;
+    font-weight: 700;
+}
+
+.ff-pages__preview {
+    text-align: center;
+}
+
+.ff-pages__preview-image {
+    width: 100%;
+    max-width: 256px;
+    aspect-ratio: 1 / 1;
+    object-fit: cover;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.ff-pages__note {
+    font: 10px/1.4 system-ui, sans-serif;
+    opacity: 0.55;
+    margin: 8px 0 0;
+}
+
+.ff-drawing__canvas {
+    display: block;
+    width: 100%;
+    max-width: 256px;
+    aspect-ratio: 1 / 1;
+    margin: 0 auto;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: #12151b;
+    cursor: crosshair;
+    touch-action: none;
+}
+
+.ff-drawing__tools {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.ff-drawing__color,
+.ff-drawing__brush {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font: 10px/1 system-ui, sans-serif;
+    opacity: 0.75;
+}
+
+.ff-drawing__brush input[type='range'] {
+    width: 60px;
+    accent-color: #9fd8ff;
+}
+
+.ff-drawing__hint {
+    font: 10px/1.4 system-ui, sans-serif;
+    opacity: 0.5;
+    margin: 6px 0 0;
+    text-align: center;
 }
 
 @media (prefers-color-scheme: light) {

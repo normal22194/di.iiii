@@ -5,8 +5,9 @@ const ACTION_COPY = {
     place: (e) => `${e.actorLabel || 'someone'} placed ${e.targetLabel}`,
     claim: (e) => `${e.actorLabel || 'someone'} chose to keep ${e.targetLabel} forever`,
     revoke: (e) => `${e.targetLabel} was taken back — permanence moved elsewhere`,
+    release: (e) => `${e.actorLabel || 'someone'} let go of ${e.targetLabel} — its permanence returned to the pool`,
     advance: (e) => `the space drifted (${e.detail?.stepped ?? 0} marks)`,
-    residue: (e) => `${e.detail?.reachedResidue ?? 0} mark(s) faded into residue`
+    residue: (e) => `${e.detail?.reachedResidue ?? 0} mark(s) faded away completely`
 }
 
 const describe = (entry) => (ACTION_COPY[entry.action] || ((e) => `${e.action}: ${e.targetLabel}`))(entry)

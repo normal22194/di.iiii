@@ -6,7 +6,7 @@ const MARK_TYPES = [
     { key: 'text', label: 'Text' }
 ]
 
-export default function PlacementPanel({ onPlace, disabled }) {
+export default function PlacementPanel({ onPlace, onImportClick, disabled }) {
     return (
         <div className="ff-placement">
             <span className="ff-placement__prompt">Add a mark</span>
@@ -22,6 +22,14 @@ export default function PlacementPanel({ onPlace, disabled }) {
                         {label}
                     </button>
                 ))}
+                <button
+                    type="button"
+                    className="ff-button ff-button--ghost"
+                    disabled={disabled}
+                    onClick={onImportClick}
+                >
+                    ⤒ Import…
+                </button>
             </div>
         </div>
     )

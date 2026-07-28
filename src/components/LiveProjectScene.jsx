@@ -8,6 +8,7 @@ import { useXrAr } from '../hooks/useXrAr.js'
 import MadeWithBadge from './MadeWithBadge.jsx'
 import { WebglContextLostOverlay, useWebglContextGuard } from './WebglContextGuard.jsx'
 import SceneEntityErrorBoundary from './SceneEntityErrorBoundary.jsx'
+import { hitTestEntitiesInRect } from './marqueeSelect.js'
 import { createProjectSyncService } from '../project/services/projectSyncService.js'
 import {
     buildProjectAssetUrl,
@@ -81,6 +82,15 @@ function EntityVisual({ entity, assetMap }) {
         emissive: appearance.emissive,
         emissiveIntensity: appearance.emissiveIntensity
     }
+    // Finite Forever's "pages": each of a box's 6 faces can carry its own
+    // independently-drawn/uploaded texture instead of one shared one — see
+    // BoxObject's per-face materials. null for anything without a pages
+    // component (every box outside Finite Forever), which keeps BoxObject
+    // on its existing single-material path.
+    const pages = entity.components?.pages
+    const pageTextures = pages?.items
+        ? pages.items.map((item) => (item?.assetId ? assetMap.get(item.assetId) || null : null))
+        : null
 
     switch (entity.type) {
     case 'box':
@@ -91,6 +101,7 @@ function EntityVisual({ entity, assetMap }) {
                 wireframe={Boolean(appearance.wireframe)}
                 opacity={appearance.opacity}
                 material={material}
+                pageTextures={pageTextures}
             />
         )
     case 'sphere':
@@ -366,6 +377,30 @@ function GateGlow({ entity }) {
     )
 }
 
+// Marks a marquee-selected entity — purely additive (an overlay ring, same
+// pattern as GateGlow above), never touches the entity's own material, so
+// it's safe regardless of entity type (box with per-face pages materials,
+// media, text, whatever).
+function SelectionRing({ entity }) {
+    const ringRef = useRef(null)
+    const pos = entity.components?.transform?.position || [0, 0, 0]
+
+    useFrame((state) => {
+        const ring = ringRef.current
+        if (!ring) return
+        const t = state.clock.getElapsedTime()
+        const pulse = 0.6 + Math.sin(t * 3) * 0.25
+        ring.material.opacity = pulse
+    })
+
+    return (
+        <mesh ref={ringRef} position={[pos[0], pos[1] + 0.02, pos[2]]} rotation={[-Math.PI / 2, 0, 0]}>
+            <ringGeometry args={[0.75, 0.9, 40]} />
+            <meshBasicMaterial color={0x9fd8ff} transparent opacity={0.8} toneMapped={false} side={THREE.DoubleSide} depthWrite={false} />
+        </mesh>
+    )
+}
+
 function AmbientField({ center }) {
     const pointsRef = useRef(null)
     const [geometry, setGeometry] = useState(null)
@@ -400,7 +435,7 @@ function AmbientField({ center }) {
 
 // Free-roam walk: WASD + arrows move/turn; desktop uses pointer lock for look;
 // mobile uses touch outside the joystick zone for look.
-function Walker({ playerRef, onNearestZone, entities, bounds, joystickRef, joyVisRef, joyThumbRef, vertTouchRef, onLockChange, flyMode, isArActive, arTouchElRef }) {
+function Walker({ playerRef, onNearestZone, entities, bounds, joystickRef, joyVisRef, joyThumbRef, vertTouchRef, onLockChange, flyMode, isArActive, arTouchElRef, enablePointerLock = true }) {
     const { camera, gl } = useThree()
     // During an XR session the camera pose is owned by the headset/phone and
     // locomotion is driven through XROrigin (see XrLocomotion). Walker must NOT
@@ -615,6 +650,14 @@ function Walker({ playerRef, onNearestZone, entities, bounds, joystickRef, joyVi
                     dragLastX = e.clientX
                     dragLastY = e.clientY
                 }
+                // enablePointerLock=false skips engaging the OS-level lock
+                // entirely (Finite Forever: a plain click was rotating the
+                // view and hiding the cursor until Escape) — draggingCanvas
+                // is still set above, so click-and-hold-drag keeps working
+                // as a gentler look control via the drag-look branch below;
+                // only a simple click (or moving without holding) no longer
+                // rotates the camera.
+                if (!enablePointerLock) return
                 if (document.pointerLockElement === el || lockBroken) return
                 const req = el.requestPointerLock()
                 if (req && typeof req.catch === 'function') {
@@ -716,7 +759,7 @@ function Walker({ playerRef, onNearestZone, entities, bounds, joystickRef, joyVi
                 el.removeEventListener('touchcancel', onTouchEnd)
             }
         }
-    }, [gl, playerRef, joystickRef, joyVisRef, joyThumbRef, isArActive, arTouchElRef])
+    }, [gl, playerRef, joystickRef, joyVisRef, joyThumbRef, isArActive, arTouchElRef, enablePointerLock])
 
     useFrame((_, delta) => {
         // XrLocomotion owns movement + camera during a session.
@@ -1264,7 +1307,23 @@ const LiveProjectScene = forwardRef(function LiveProjectScene({
     // Opt-in: undefined for every existing caller (WCC, PublicProjectViewer),
     // so double-click keeps doing nothing there. Finite Forever uses it to
     // select an already-placed mark and reopen its edit menu.
-    onEntityDoubleClick = null
+    onEntityDoubleClick = null,
+    // Defaults true so every existing caller (WCC, PublicProjectViewer) keeps
+    // today's click-to-lock mouse-look. Finite Forever sets this false — a
+    // plain click was engaging pointer lock and rotating the view until
+    // Escape, which fights with clicking/double-clicking marks to edit them.
+    enablePointerLock = true,
+    // Opt-in TouchDesigner-style marquee select: undefined for every
+    // existing caller, so right-click keeps doing nothing (default browser
+    // context menu) there. Finite Forever's admin workspace turns this on
+    // to box-select multiple marks at once. onMarqueeSelect receives the
+    // array of entity ids whose position landed inside the drag rectangle.
+    marqueeSelectEnabled = false,
+    onMarqueeSelect = null,
+    // Entity ids to draw a selection ring around (see SelectionRing) — kept
+    // separate from marqueeSelectEnabled so a caller could show a selection
+    // it tracks itself without needing the drag gesture active.
+    selectedEntityIds = null
 }, ref) {
     const { doc, loadError, retryDocument } = useLiveProjectDocument(projectId)
     const xr = useXrAr()
@@ -1306,6 +1365,71 @@ const LiveProjectScene = forwardRef(function LiveProjectScene({
         })
     }), [])
     const { canvasKey, contextLost, bindContextGuard, restoreContext } = useWebglContextGuard()
+
+    // Marquee select: right-mousedown-drag draws a screen-space rectangle,
+    // release projects every entity's world position through the camera and
+    // reports whichever land inside it. All plain DOM/vector math outside
+    // the R3F tree (captured via Canvas's onCreated below) rather than a
+    // dedicated R3F child — simpler, and keeps this entirely opt-in without
+    // touching how any other LiveProjectScene caller renders.
+    const marqueeCameraRef = useRef(null)
+    const [marqueeCanvasEl, setMarqueeCanvasEl] = useState(null)
+    const [marqueeRect, setMarqueeRect] = useState(null) // { left, top, width, height } in canvas-relative px
+    useEffect(() => {
+        if (!marqueeSelectEnabled || !marqueeCanvasEl) return undefined
+        const el = marqueeCanvasEl
+        let dragStart = null
+        let liveRect = null
+        const onContextMenu = (e) => e.preventDefault()
+        const onPointerDown = (e) => {
+            if (e.button !== 2) return
+            e.preventDefault()
+            const rect = el.getBoundingClientRect()
+            dragStart = { x: e.clientX - rect.left, y: e.clientY - rect.top }
+            liveRect = { left: dragStart.x, top: dragStart.y, width: 0, height: 0 }
+            setMarqueeRect(liveRect)
+            try { el.setPointerCapture(e.pointerId) } catch { /* not supported */ }
+        }
+        const onPointerMove = (e) => {
+            if (!dragStart) return
+            const rect = el.getBoundingClientRect()
+            const x = e.clientX - rect.left
+            const y = e.clientY - rect.top
+            liveRect = {
+                left: Math.min(dragStart.x, x),
+                top: Math.min(dragStart.y, y),
+                width: Math.abs(x - dragStart.x),
+                height: Math.abs(y - dragStart.y)
+            }
+            setMarqueeRect(liveRect)
+        }
+        const onPointerUp = (e) => {
+            if (!dragStart) return
+            const finalRect = liveRect
+            dragStart = null
+            liveRect = null
+            setMarqueeRect(null)
+            try { el.releasePointerCapture(e.pointerId) } catch { /* already released */ }
+            // A tiny drag (or an accidental right-click with no real drag)
+            // shouldn't clear or replace an existing selection.
+            if (!finalRect || (finalRect.width < 4 && finalRect.height < 4)) return
+            const camera = marqueeCameraRef.current
+            if (!camera || !onMarqueeSelect) return
+            const rect = el.getBoundingClientRect()
+            onMarqueeSelect(hitTestEntitiesInRect(doc?.entities || [], camera, finalRect, rect.width, rect.height))
+        }
+        el.addEventListener('contextmenu', onContextMenu)
+        el.addEventListener('pointerdown', onPointerDown)
+        el.addEventListener('pointermove', onPointerMove)
+        el.addEventListener('pointerup', onPointerUp)
+        return () => {
+            el.removeEventListener('contextmenu', onContextMenu)
+            el.removeEventListener('pointerdown', onPointerDown)
+            el.removeEventListener('pointermove', onPointerMove)
+            el.removeEventListener('pointerup', onPointerUp)
+        }
+    }, [marqueeSelectEnabled, marqueeCanvasEl, doc, onMarqueeSelect])
+
     // Dev-only observability hook for scripts/input-check.mjs: input-contract
     // probes assert on real walker state instead of guessing from screenshots.
     // The ref (not the object) — worldState.spawn replaces playerRef.current.
@@ -1434,7 +1558,11 @@ const LiveProjectScene = forwardRef(function LiveProjectScene({
                 camera={{ position: [0, EYE_HEIGHT, 6], fov: interactive ? 60 : 45, near: 0.1, far: 200 }}
                 dpr={[1, 1.8]}
                 gl={{ antialias: true }}
-                onCreated={({ gl }) => bindContextGuard(gl)}
+                onCreated={({ gl, camera }) => {
+                    bindContextGuard(gl)
+                    marqueeCameraRef.current = camera
+                    setMarqueeCanvasEl(gl.domElement)
+                }}
                 style={{ position: 'absolute', inset: 0, display: 'block', touchAction: 'none' }}
             >
                 <XR store={xr.xrStore}>
@@ -1462,6 +1590,9 @@ const LiveProjectScene = forwardRef(function LiveProjectScene({
                     </SceneEntityErrorBoundary>
                 ))}
                 {showEntities && gateEntity ? <GateGlow entity={gateEntity} /> : null}
+                {showEntities && selectedEntityIds && selectedEntityIds.length > 0 && entities
+                    .filter((entity) => selectedEntityIds.includes(entity.id))
+                    .map((entity) => <SelectionRing key={entity.id} entity={entity} />)}
                 {interactive ? (
                     <Walker
                         playerRef={playerRef}
@@ -1476,6 +1607,7 @@ const LiveProjectScene = forwardRef(function LiveProjectScene({
                         flyMode={flyMode}
                         isArActive={isArActive}
                         arTouchElRef={arTouchElRef}
+                        enablePointerLock={enablePointerLock}
                     />
                 ) : (
                     <IdleOrbit center={center} />
@@ -1483,6 +1615,13 @@ const LiveProjectScene = forwardRef(function LiveProjectScene({
                 {interactive && <XrLocomotion playerRef={playerRef} joystickRef={joystickRef} flyMode={flyMode} vertTouchRef={vertTouchRef} />}
                 </XR>
             </Canvas>
+
+            {marqueeRect && (
+                <div
+                    className="live-scene-marquee"
+                    style={{ left: marqueeRect.left, top: marqueeRect.top, width: marqueeRect.width, height: marqueeRect.height }}
+                />
+            )}
 
             {contextLost && <WebglContextLostOverlay onRestore={restoreContext} />}
 

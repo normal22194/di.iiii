@@ -259,6 +259,12 @@ function initDb(dbPath) {
   ensureColumn(db, 'projects', 'slug', 'TEXT')
   ensureColumn(db, 'users', 'spaces', 'TEXT')
   ensureColumn(db, 'users', 'is_unrestricted', 'INTEGER NOT NULL DEFAULT 0')
+  // Finite Forever: whether the actor's name on this ritual-log entry should
+  // be shown to other (non-admin) visitors — added after ritual_log first
+  // shipped, so existing rows need the column added explicitly. Defaults to
+  // visible (1) so pre-existing entries keep behaving as they did before
+  // this flag existed.
+  ensureColumn(db, 'ritual_log', 'actor_visible', 'INTEGER NOT NULL DEFAULT 1')
   backfillUserUnrestricted(db)
   backfillGlobalSpace(db)
   dedupeAndUniqueOps(db)

@@ -1680,10 +1680,11 @@ initStorage()
     }, 1000 * 60 * 30)
     // Finite Forever's drift sweep — recomputes unclaimed marks' appearance
     // from real elapsed time since placement (see finiteForeverRoutes.js),
-    // reaching residue ~12 real hours after placement on its own, with no
-    // admin action required. 'ritual' matches FINITE_FOREVER_PROJECT_ID in
-    // src/finiteforever/permanence.js. No-ops harmlessly if that project
-    // doesn't exist on this server (e.g. a fork that hasn't seeded it).
+    // fading them out and deleting them ~12 real hours after placement on
+    // its own, with no admin action required. 'ritual' matches
+    // FINITE_FOREVER_PROJECT_ID in src/finiteforever/permanence.js. No-ops
+    // harmlessly if that project doesn't exist on this server (e.g. a fork
+    // that hasn't seeded it).
     setInterval(() => {
       runFiniteForeverDriftSweep('ritual').catch((error) => logger.warn('Failed to run Finite Forever drift sweep', error))
     }, 1000 * 60 * 10)

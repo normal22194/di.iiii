@@ -6,19 +6,23 @@
 // permanencePool` patches) — this module only adds what genuinely can't be a
 // plain client-submitted op: a server-driven drift sweep (recomputing every
 // unclaimed mark's appearance from real elapsed wall-clock time since it was
-// placed, reaching residue at DRIFT_DURATION_MS), plus the durable ritual log
-// (kept in its own table, see ritualLogStore.js, specifically so it survives
-// independent of this project's own document).
+// placed, fading it out and deleting it once DRIFT_DURATION_MS is reached),
+// plus the durable ritual log (kept in its own table, see ritualLogStore.js,
+// specifically so it survives independent of this project's own document).
 const crypto = require('node:crypto')
 
-// A mark left to drift fully reaches residue 12 real hours after placement —
-// this is wall-clock time (Date.now()), not a per-click step, so it keeps
-// advancing whether or not anyone is looking or an admin ever presses the
-// manual trigger below.
+// A mark left to drift fades all the way out and is removed 12 real hours
+// after placement — this is wall-clock time (Date.now()), not a per-click
+// step, so it keeps advancing whether or not anyone is looking or an admin
+// ever presses the manual trigger below.
 const DRIFT_DURATION_MS = 12 * 60 * 60 * 1000
 const DRIFT_STAGE_COUNT = 4 // informational bucket for the ritual log/UI only — the opacity/scale math below uses the continuous fraction directly, not this.
-const MIN_OPACITY = 0.12
-const MIN_SCALE = 0.35
+// Scale never quite hits exactly 0 (a degenerate zero-scale transform can
+// upset some renderers/hit-testing); opacity does, so the mark is fully
+// invisible for whatever sliver of a sweep interval it exists in right
+// before deletion actually removes it.
+const MIN_OPACITY = 0
+const MIN_SCALE = 0.02
 
 // t: 0..1, the fraction of DRIFT_DURATION_MS elapsed since placement.
 // Computed from the placement-time snapshot every sweep (never compounds off
@@ -28,8 +32,8 @@ function computeDriftAppearance(baseAppearance, baseScale, t) {
   const baseOpacity = typeof baseAppearance?.opacity === 'number' ? baseAppearance.opacity : 1
   const scaleSource = Array.isArray(baseScale) && baseScale.length === 3 ? baseScale : [1, 1, 1]
   return {
-    opacity: Math.max(MIN_OPACITY, baseOpacity * (1 - 0.75 * clamped)),
-    scale: scaleSource.map((value) => Math.max(MIN_SCALE, (Number(value) || 1) * (1 - 0.55 * clamped)))
+    opacity: Math.max(MIN_OPACITY, baseOpacity * (1 - clamped)),
+    scale: scaleSource.map((value) => Math.max(MIN_SCALE, (Number(value) || 1) * (1 - clamped)))
   }
 }
 
@@ -81,19 +85,37 @@ function registerFiniteForeverRoutes(router, {
 
         const placedAt = Number(permanence.placedAt) || timestamp
         const t = (timestamp - placedAt) / DRIFT_DURATION_MS
+
+        // Fully faded: remove it outright rather than parking it at a floor
+        // appearance forever — "residue" here means gone, not a permanently
+        // dim/tiny leftover. Never claimed (permanence.status is still
+        // 'drifting'), so there's no permanence-pool slot to release.
+        if (t >= 1) {
+          versionedOps.push({
+            opId: makeOpId(),
+            clientId: 'server',
+            type: 'deleteEntity',
+            payload: { entityId: entity.id },
+            version: ++nextVersion,
+            timestamp
+          })
+          stepped += 1
+          reachedResidue += 1
+          continue
+        }
+
         const { opacity, scale } = computeDriftAppearance(permanence.baseAppearance, permanence.baseScale, t)
         const nextStage = Math.min(DRIFT_STAGE_COUNT, Math.floor(Math.max(0, t) * DRIFT_STAGE_COUNT))
-        const nextStatus = t >= 1 ? 'residue' : 'drifting'
 
         // Nothing to write if this entity hasn't moved since the last sweep
-        // (freshly placed, or already at the floor with no placedAt to heal).
-        if (nextStatus === permanence.status && nextStage === (Number(permanence.stage) || 0) && permanence.placedAt) continue
+        // (freshly placed, or no placedAt to heal).
+        if (nextStage === (Number(permanence.stage) || 0) && permanence.placedAt) continue
 
         versionedOps.push({
           opId: makeOpId(),
           clientId: 'server',
           type: 'updateComponent',
-          payload: { entityId: entity.id, component: 'permanence', patch: { stage: nextStage, status: nextStatus, placedAt } },
+          payload: { entityId: entity.id, component: 'permanence', patch: { stage: nextStage, placedAt } },
           version: ++nextVersion,
           timestamp
         })
@@ -114,7 +136,6 @@ function registerFiniteForeverRoutes(router, {
           timestamp
         })
         stepped += 1
-        if (nextStatus === 'residue') reachedResidue += 1
       }
 
       if (!versionedOps.length) {
@@ -187,6 +208,7 @@ function registerFiniteForeverRoutes(router, {
         const entry = appendRitualLog({
           spaceId,
           actorLabel: req.body?.actorLabel,
+          actorVisible: req.body?.actorVisible !== false,
           action,
           targetLabel: req.body?.targetLabel,
           detail: req.body?.detail
@@ -202,6 +224,10 @@ function registerFiniteForeverRoutes(router, {
 
   // Public read — the ritual log is meant to remain legible even without a
   // session, matching the "the ritual remembers" framing of the concept.
+  // Entries whose actor chose not to be visible get their name masked here,
+  // server-side, for anyone but an admin — this is the enforcement point,
+  // not just a client-side display choice, so it can't be bypassed by
+  // reading the response directly.
   router.get('/api/spaces/:spaceId/ritual-log', async (req, res, next) => {
     try {
       const spaceId = String(req.params.spaceId || '')
@@ -212,7 +238,11 @@ function registerFiniteForeverRoutes(router, {
         since: Number.isFinite(since) ? since : 0,
         limit: Number.isFinite(limit) ? limit : 200
       })
-      res.json({ entries })
+      const isAdmin = req.authState?.role === 'admin'
+      const visibleEntries = isAdmin ? entries : entries.map((entry) => (
+        entry.actorVisible ? entry : { ...entry, actorLabel: 'an anonymous visitor' }
+      ))
+      res.json({ entries: visibleEntries })
     } catch (error) {
       next(error)
     }

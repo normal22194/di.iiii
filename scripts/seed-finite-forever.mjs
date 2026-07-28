@@ -7,7 +7,7 @@
  * fixtures. Idempotent — safe to re-run against an already-seeded server.
  *
  * Usage: node scripts/seed-finite-forever.mjs [--to <url>] [--token <tok>] [--pool <n>]
- *   defaults: --to http://localhost:4000/serverXR, --token $SEED_API_TOKEN, --pool 12
+ *   defaults: --to http://localhost:4000/serverXR, --token $SEED_API_TOKEN, --pool 33
  *   Space creation is admin/session-only when the server runs with
  *   REQUIRE_AUTH=true — pass --token (or set SEED_API_TOKEN) in that case.
  */
@@ -16,7 +16,7 @@ const argv = process.argv.slice(2)
 const opt = (name) => { const i = argv.indexOf(`--${name}`); return i !== -1 ? argv[i + 1] : null }
 const BASE = (opt('to') || 'http://localhost:4000/serverXR').replace(/\/+$/, '')
 const TOKEN = opt('token') || process.env.SEED_API_TOKEN || ''
-const POOL_TOTAL = Number(opt('pool')) || 12
+const POOL_TOTAL = Number(opt('pool')) || 33
 
 const SPACE_ID = 'finite-forever'
 const PROJECT_ID = 'ritual'
