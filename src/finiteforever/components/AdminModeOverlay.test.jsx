@@ -1,5 +1,5 @@
-import { render, screen } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { fireEvent, render, screen } from '@testing-library/react'
+import { describe, expect, it, vi } from 'vitest'
 import AdminModeOverlay from './AdminModeOverlay.jsx'
 
 describe('AdminModeOverlay', () => {
@@ -41,5 +41,20 @@ describe('AdminModeOverlay', () => {
     it('falls back to the entity id when it has no name', () => {
         render(<AdminModeOverlay selectedEntities={[{ id: 'mark-9' }]} />)
         expect(screen.getByText('mark-9')).toBeInTheDocument()
+    })
+
+    it('shows a "Make all permanent" button only when something is selected, and calls onMakePermanent', () => {
+        const onMakePermanent = vi.fn()
+        const { rerender } = render(<AdminModeOverlay selectedEntities={[]} onMakePermanent={onMakePermanent} />)
+        expect(screen.queryByRole('button', { name: 'Make all permanent' })).not.toBeInTheDocument()
+
+        rerender(<AdminModeOverlay selectedEntities={[{ id: 'mark-1', name: 'Box mark' }]} onMakePermanent={onMakePermanent} />)
+        fireEvent.click(screen.getByRole('button', { name: 'Make all permanent' }))
+        expect(onMakePermanent).toHaveBeenCalledTimes(1)
+    })
+
+    it('disables the "Make all permanent" button while busy', () => {
+        render(<AdminModeOverlay selectedEntities={[{ id: 'mark-1', name: 'Box mark' }]} busy />)
+        expect(screen.getByRole('button', { name: 'Make all permanent' })).toBeDisabled()
     })
 })

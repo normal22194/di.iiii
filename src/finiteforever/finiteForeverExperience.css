@@ -129,11 +129,6 @@
     background: transparent;
 }
 
-.ff-button--admin {
-    border-color: rgba(255, 180, 120, 0.5);
-    color: #ffd9b0;
-}
-
 .ff-placement {
     display: flex;
     flex-direction: column;
@@ -306,6 +301,43 @@
     font: 11px/1.4 system-ui, sans-serif;
     opacity: 0.75;
     margin: 0 0 10px;
+}
+
+.ff-claim-prompt__owner-note {
+    font: 500 10px/1.4 system-ui, sans-serif;
+    color: #ffd9b0;
+    opacity: 0.85;
+    text-align: center;
+    margin: 0 0 8px;
+}
+
+.ff-claim-prompt__revoke-picker {
+    margin: 0 0 10px;
+    padding: 8px 0;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.ff-claim-prompt__revoke-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 0 0 8px;
+    padding: 0;
+    list-style: none;
+}
+
+.ff-claim-prompt__revoke-list button {
+    width: 100%;
+    text-align: left;
+}
+
+.ff-claim-prompt__confirm-row {
+    display: flex;
+    gap: 8px;
+}
+
+.ff-claim-prompt__confirm-row button {
+    flex: 1;
 }
 
 .ff-claim-prompt__edit {
@@ -518,6 +550,25 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
+}
+
+.ff-claim-prompt__claim-button {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    line-height: 1.3;
+}
+
+.ff-claim-prompt__claim-button-main {
+    font-weight: 600;
+}
+
+.ff-claim-prompt__claim-button-sub {
+    font: 400 10px/1.3 system-ui, sans-serif;
+    opacity: 0.8;
+    white-space: normal;
+    text-align: center;
 }
 
 /* Scoped down-sizing for buttons/inputs inside the compact edit panel only —
@@ -820,6 +871,11 @@
     font: 11px/1.3 system-ui, sans-serif;
 }
 
+.ff-admin-mode__make-permanent {
+    width: 100%;
+    margin: 0 0 8px;
+}
+
 .ff-advanced__row {
     display: flex;
     align-items: center;
@@ -936,5 +992,166 @@
 @media (prefers-color-scheme: light) {
     .ff-experience {
         background: #0a0c10;
+    }
+}
+
+/* Touch/phone pass. `pointer: coarse` (not a width breakpoint) matches how
+   LiveProjectScene itself already detects mobile for the joystick/touch-look
+   — a phone in landscape can be wider than plenty of small desktop windows,
+   so pointer type is the more reliable signal here. DraggablePanel already
+   skips free-drag/resize on touch in JS (see its own isTouch check) — this
+   is the matching CSS that turns every such panel into a fixed, full-width
+   bottom sheet instead of a small centered window. */
+@media (pointer: coarse) {
+    .ff-draggable {
+        top: auto;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        transform: none;
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+        max-height: 80vh;
+        border-radius: 16px 16px 0 0;
+        resize: none;
+    }
+
+    /* Repurposed, not hidden: X/Y dragging is disabled on touch (see
+       DraggablePanel.jsx), but the header drag now resizes the sheet's
+       height instead — the grip's "you can drag this" affordance still
+       applies, just to a different gesture. Bigger hit area for a finger. */
+    .ff-draggable__header {
+        padding-top: 10px;
+        padding-bottom: 10px;
+    }
+
+    .ff-draggable__grip {
+        font-size: 13px;
+    }
+
+    /* Larger tap targets throughout — 20-26px icon buttons are well under
+       the ~44px touch-target guideline; everything here still fits the
+       compact edit panel's existing layout, just roomier to actually tap. */
+    .ff-button {
+        padding: 11px 16px;
+        font-size: 14px;
+    }
+
+    .ff-claim-prompt .ff-button {
+        padding: 9px 14px;
+        font-size: 13px;
+    }
+
+    .ff-draggable__close {
+        width: 32px;
+        height: 32px;
+        font-size: 14px;
+    }
+
+    .ff-move__step {
+        width: 30px;
+        height: 30px;
+        font-size: 14px;
+    }
+
+    .ff-pages__tab {
+        width: 34px;
+        height: 34px;
+    }
+
+    .ff-claim-prompt__color-label input[type='color'],
+    .ff-claim-prompt .ff-claim-prompt__color-label input[type='color'] {
+        width: 34px;
+        height: 34px;
+    }
+
+    /* Admin mode's box-select is a right-click-drag gesture with no touch
+       equivalent — the panel itself just needs to stay on-screen and
+       readable if an admin opens it on a phone, not be reworked into a
+       touch gesture that doesn't exist. */
+    .ff-admin-mode {
+        width: min(260px, calc(100vw - 32px));
+    }
+}
+
+/* Narrow-screen layout pass — a width breakpoint, deliberately separate from
+   the `(pointer: coarse)` block above: that one is about input type (also
+   true for a touch laptop or tablet with plenty of screen room), this one is
+   about there simply not being much screen to work with. Phones run
+   320-430px wide in portrait; 480px covers all of them with room to spare
+   while staying clear of tablets (768px+). */
+@media (max-width: 480px) {
+    .ff-overlay {
+        top: 10px;
+        left: 10px;
+        right: 10px;
+        gap: 8px;
+        /* Safety net, not the primary strategy — sizes below are chosen so
+           the two sides fit side by side on every phone this targets; wrap
+           only guards the rare extra-long username. */
+        flex-wrap: wrap;
+    }
+
+    .ff-overlay--bottom {
+        left: 10px;
+        right: 10px;
+    }
+
+    .ff-hud {
+        padding: 6px 10px;
+        gap: 1px;
+    }
+
+    .ff-hud__label {
+        font-size: 10px;
+    }
+
+    .ff-hud__count {
+        font-size: 15px;
+    }
+
+    .ff-identity-chip {
+        padding: 3px 8px;
+        font-size: 10px;
+    }
+
+    .ff-overlay__actions .ff-button {
+        padding: 8px 12px;
+        font-size: 12px;
+    }
+
+    /* Admin mode's own panel sits below the top bar by a fixed offset —
+       widened here in case a long username wraps the bar onto two lines. */
+    .ff-admin-mode {
+        top: 120px;
+    }
+
+    .ff-placement {
+        padding: 10px 12px;
+        gap: 6px;
+    }
+
+    .ff-placement__buttons {
+        gap: 6px;
+    }
+
+    .ff-entry-gate__card {
+        width: min(340px, calc(100vw - 32px));
+        padding: 22px 18px;
+        gap: 10px;
+    }
+
+    .ff-entry-gate__title {
+        font-size: 17px;
+    }
+
+    .ff-ritual-log {
+        padding: 14px;
+        width: 100vw;
+    }
+
+    .ff-intro {
+        padding: 0 18px;
     }
 }

@@ -1,6 +1,18 @@
 import { fireEvent, render, screen } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import DraggablePanel from './DraggablePanel.jsx'
+
+// jsdom has no window.matchMedia at all (not even returning a default) —
+// every other test in this file relies on that absence making isTouch
+// default to false (see DraggablePanel.jsx's `window.matchMedia?.(...)`).
+// This mocks it just for the touch-specific test below.
+const mockPointerType = (matches) => {
+    window.matchMedia = vi.fn(() => ({ matches }))
+}
+
+afterEach(() => {
+    delete window.matchMedia
+})
 
 describe('DraggablePanel', () => {
     it('renders a title and its children', () => {
@@ -119,5 +131,64 @@ describe('DraggablePanel', () => {
 
         window.innerWidth = originalWidth
         window.innerHeight = originalHeight
+    })
+
+    describe('on a touch device', () => {
+        // X/Y repositioning makes no sense once CSS pins the panel to the
+        // bottom edge (see the `(pointer: coarse)` block in
+        // finiteForeverExperience.css) — the header drag is repurposed into
+        // a vertical resize instead of being dropped entirely.
+        it('opens smaller than the desktop default, with no left/top positioning', () => {
+            mockPointerType(true)
+            const originalHeight = window.innerHeight
+            window.innerHeight = 1000
+
+            const { container } = render(<DraggablePanel title="Edit mark"><p>body</p></DraggablePanel>)
+            const panel = container.querySelector('.ff-draggable')
+
+            expect(panel.style.left).toBe('')
+            expect(panel.style.top).toBe('')
+            expect(panel.style.height).toBe('420px') // 42% of 1000
+
+            window.innerHeight = originalHeight
+        })
+
+        it('dragging the header up makes the sheet taller', () => {
+            mockPointerType(true)
+            const originalHeight = window.innerHeight
+            window.innerHeight = 1000
+
+            const { container } = render(<DraggablePanel title="Edit mark"><p>body</p></DraggablePanel>)
+            const panel = container.querySelector('.ff-draggable')
+            const header = container.querySelector('.ff-draggable__header')
+            header.setPointerCapture = vi.fn()
+            Object.defineProperty(panel, 'getBoundingClientRect', { value: () => ({ height: 420 }), configurable: true })
+
+            fireEvent.pointerDown(header, { clientY: 500, pointerId: 1 })
+            fireEvent.pointerMove(header, { clientY: 400, pointerId: 1 }) // dragged up 100px
+
+            expect(panel.style.height).toBe('520px')
+
+            window.innerHeight = originalHeight
+        })
+
+        it('dragging the header down makes the sheet shorter, clamped to a minimum', () => {
+            mockPointerType(true)
+            const originalHeight = window.innerHeight
+            window.innerHeight = 1000
+
+            const { container } = render(<DraggablePanel title="Edit mark"><p>body</p></DraggablePanel>)
+            const panel = container.querySelector('.ff-draggable')
+            const header = container.querySelector('.ff-draggable__header')
+            header.setPointerCapture = vi.fn()
+            Object.defineProperty(panel, 'getBoundingClientRect', { value: () => ({ height: 420 }), configurable: true })
+
+            fireEvent.pointerDown(header, { clientY: 500, pointerId: 1 })
+            fireEvent.pointerMove(header, { clientY: 5000, pointerId: 1 }) // dragged far down
+
+            expect(panel.style.height).toBe('220px') // clamped at 22% of 1000
+
+            window.innerHeight = originalHeight
+        })
     })
 })

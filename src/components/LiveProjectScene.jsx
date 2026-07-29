@@ -1,7 +1,7 @@
 import { Suspense, forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
-import { Grid, Text, Billboard } from '@react-three/drei'
+import { Grid, Text, Billboard, TransformControls } from '@react-three/drei'
 import { XR, XROrigin, useXR, useXRControllerLocomotion, useXRInputSourceState } from '@react-three/xr'
 import * as THREE from 'three'
 import { useXrAr } from '../hooks/useXrAr.js'
@@ -306,8 +306,18 @@ function EntityVisual({ entity, assetMap }) {
 // Idle motion layered on top of the authored transform -- gates and ground
 // stay put (they're architecture), flying pieces get a real flight path,
 // everything else gets a gentle bob + slow spin so the room feels alive.
-function AnimatedEntity({ entity, assetMap, childMap = null, onEntityDoubleClick = null }) {
+function AnimatedEntity({
+    entity, assetMap, childMap = null, onEntityDoubleClick = null,
+    draggableEntityId = null, dragSuppressedRef = null, onEntityDragStart = null, onEntityDragEnd = null
+}) {
     const groupRef = useRef(null)
+    const transformControlsRef = useRef(null)
+    // While the gizmo is actively being dragged, idle animation must not
+    // touch position/rotation at all — it recomputes from the stale
+    // pre-drag basePos every frame, which would otherwise fight (and win
+    // against, since it runs after the gizmo's own update) whatever the
+    // gizmo just set, making dragging look like it does nothing.
+    const isDraggingRef = useRef(false)
     const basePos = entity.components?.transform?.position || [0, 0, 0]
     const baseRot = entity.components?.transform?.rotation || [0, 0, 0]
     const baseScale = entity.components?.transform?.scale || [1, 1, 1]
@@ -325,6 +335,7 @@ function AnimatedEntity({ entity, assetMap, childMap = null, onEntityDoubleClick
     useFrame((state) => {
         const group = groupRef.current
         if (!group) return
+        if (isDraggingRef.current) return
         if (timelineActive) {
             // Authored keyframes replace idle motion — no seed, playback is deterministic.
             const pose = sampleTimeline(timeline, state.clock.getElapsedTime())
@@ -335,25 +346,64 @@ function AnimatedEntity({ entity, assetMap, childMap = null, onEntityDoubleClick
         applyAnimation(group, anim, basePos, baseRot, t)
     })
 
+    // Only the one entity the caller marked draggable gets a gizmo at all —
+    // every other entity keeps behaving exactly as before, so this is
+    // opt-in per caller and per entity, not a scene-wide change.
+    const isDraggable = draggableEntityId != null && entity.id === draggableEntityId
+
+    useEffect(() => {
+        const controls = transformControlsRef.current
+        if (!controls || !isDraggable) return undefined
+        const handleDraggingChanged = (e) => {
+            isDraggingRef.current = e.value
+            if (dragSuppressedRef) dragSuppressedRef.current = { active: e.value }
+            if (e.value) {
+                onEntityDragStart?.(entity)
+            } else {
+                const group = groupRef.current
+                if (group) {
+                    onEntityDragEnd?.(entity.id, [group.position.x, group.position.y, group.position.z])
+                }
+            }
+        }
+        controls.addEventListener('dragging-changed', handleDraggingChanged)
+        return () => controls.removeEventListener('dragging-changed', handleDraggingChanged)
+    }, [isDraggable, entity, dragSuppressedRef, onEntityDragStart, onEntityDragEnd])
+
     // Hidden entities hide their whole subtree, matching the editor.
     if (entity.components?.runtime?.visible === false) return null
 
     const children = childMap?.get(entity.id) || []
     return (
-        <group
-            ref={groupRef}
-            position={basePos}
-            rotation={baseRot}
-            scale={baseScale}
-            onDoubleClick={onEntityDoubleClick ? (e) => { e.stopPropagation(); onEntityDoubleClick(entity) } : undefined}
-        >
-            <Suspense fallback={null}>
-                <EntityVisual entity={entity} assetMap={assetMap} />
-            </Suspense>
-            {children.map((child) => (
-                <AnimatedEntity key={child.id} entity={child} assetMap={assetMap} childMap={childMap} onEntityDoubleClick={onEntityDoubleClick} />
-            ))}
-        </group>
+        <>
+            <group
+                ref={groupRef}
+                position={basePos}
+                rotation={baseRot}
+                scale={baseScale}
+                onDoubleClick={onEntityDoubleClick ? (e) => { e.stopPropagation(); onEntityDoubleClick(entity) } : undefined}
+            >
+                <Suspense fallback={null}>
+                    <EntityVisual entity={entity} assetMap={assetMap} />
+                </Suspense>
+                {children.map((child) => (
+                    <AnimatedEntity
+                        key={child.id}
+                        entity={child}
+                        assetMap={assetMap}
+                        childMap={childMap}
+                        onEntityDoubleClick={onEntityDoubleClick}
+                        draggableEntityId={draggableEntityId}
+                        dragSuppressedRef={dragSuppressedRef}
+                        onEntityDragStart={onEntityDragStart}
+                        onEntityDragEnd={onEntityDragEnd}
+                    />
+                ))}
+            </group>
+            {isDraggable && (
+                <TransformControls ref={transformControlsRef} object={groupRef} mode="translate" />
+            )}
+        </>
     )
 }
 
@@ -435,7 +485,7 @@ function AmbientField({ center }) {
 
 // Free-roam walk: WASD + arrows move/turn; desktop uses pointer lock for look;
 // mobile uses touch outside the joystick zone for look.
-function Walker({ playerRef, onNearestZone, entities, bounds, joystickRef, joyVisRef, joyThumbRef, vertTouchRef, onLockChange, flyMode, isArActive, arTouchElRef, enablePointerLock = true }) {
+function Walker({ playerRef, onNearestZone, entities, bounds, joystickRef, joyVisRef, joyThumbRef, vertTouchRef, onLockChange, flyMode, isArActive, arTouchElRef, enablePointerLock = true, dragSuppressedRef = null }) {
     const { camera, gl } = useThree()
     // During an XR session the camera pose is owned by the headset/phone and
     // locomotion is driven through XROrigin (see XrLocomotion). Walker must NOT
@@ -591,7 +641,11 @@ function Walker({ playerRef, onNearestZone, entities, bounds, joystickRef, joyVi
                         -pitchLimit,
                         pitchLimit
                     )
-                } else if (draggingCanvas) {
+                } else if (draggingCanvas && !dragSuppressedRef?.current?.active) {
+                    // Suppressed while an entity drag is in progress (see
+                    // dragSuppressedRef, shared with the entity-drag effect
+                    // below) — otherwise a plain left-drag both repositions
+                    // the selected mark and rotates the camera at once.
                     // Around a lock release some browsers emit events with
                     // clientX/Y zeroed or frozen while movementX/Y is healthy
                     // — the exact inverse of the broken-compositor case. Use
@@ -759,7 +813,7 @@ function Walker({ playerRef, onNearestZone, entities, bounds, joystickRef, joyVi
                 el.removeEventListener('touchcancel', onTouchEnd)
             }
         }
-    }, [gl, playerRef, joystickRef, joyVisRef, joyThumbRef, isArActive, arTouchElRef, enablePointerLock])
+    }, [gl, playerRef, joystickRef, joyVisRef, joyThumbRef, isArActive, arTouchElRef, enablePointerLock, dragSuppressedRef])
 
     useFrame((_, delta) => {
         // XrLocomotion owns movement + camera during a session.
@@ -1323,7 +1377,20 @@ const LiveProjectScene = forwardRef(function LiveProjectScene({
     // Entity ids to draw a selection ring around (see SelectionRing) — kept
     // separate from marqueeSelectEnabled so a caller could show a selection
     // it tracks itself without needing the drag gesture active.
-    selectedEntityIds = null
+    selectedEntityIds = null,
+    // Opt-in click-drag-to-reposition via a real TransformControls gizmo
+    // (X/Y/Z arrows), undefined for every existing caller. Only the single
+    // named entity (Finite Forever passes whichever mark is currently open
+    // in its edit menu, already ownership-checked by the caller) gets a
+    // gizmo at all — see AnimatedEntity's isDraggable check.
+    // onEntityDragStart(entity) fires once when the gesture begins (the
+    // caller captures its own "before" position for undo); onEntityDragEnd
+    // (entityId, [x, y, z]) fires once on release with the final position —
+    // dragging itself is local/instant (the gizmo moves the real object
+    // directly), so there's nothing to commit until it's done.
+    draggableEntityId = null,
+    onEntityDragStart = null,
+    onEntityDragEnd = null
 }, ref) {
     const { doc, loadError, retryDocument } = useLiveProjectDocument(projectId)
     const xr = useXrAr()
@@ -1429,6 +1496,16 @@ const LiveProjectScene = forwardRef(function LiveProjectScene({
             el.removeEventListener('pointerup', onPointerUp)
         }
     }, [marqueeSelectEnabled, marqueeCanvasEl, doc, onMarqueeSelect])
+
+    // Click-drag-to-reposition the one entity the caller marked draggable —
+    // a real TransformControls gizmo (X/Y/Z arrows), attached/detached and
+    // driven entirely inside AnimatedEntity (see its isDraggable/
+    // transformControlsRef/dragging-changed wiring). This ref is just the
+    // shared signal to Walker: while the gizmo is actively being dragged,
+    // suppress the camera-look-drag that would otherwise also fire from the
+    // same left-mouse-drag (see the `!dragSuppressedRef?.current?.active`
+    // check in Walker's onMouseMove).
+    const entityDragRef = useRef({ active: false })
 
     // Dev-only observability hook for scripts/input-check.mjs: input-contract
     // probes assert on real walker state instead of guessing from screenshots.
@@ -1586,7 +1663,16 @@ const LiveProjectScene = forwardRef(function LiveProjectScene({
                 <AmbientField center={center} />
                 {showEntities && rootEntities.map((entity) => (
                     <SceneEntityErrorBoundary key={entity.id} resetKey={entity.id}>
-                        <AnimatedEntity entity={entity} assetMap={assetMap} childMap={entityChildMap} onEntityDoubleClick={onEntityDoubleClick} />
+                        <AnimatedEntity
+                            entity={entity}
+                            assetMap={assetMap}
+                            childMap={entityChildMap}
+                            onEntityDoubleClick={onEntityDoubleClick}
+                            draggableEntityId={draggableEntityId}
+                            dragSuppressedRef={entityDragRef}
+                            onEntityDragStart={onEntityDragStart}
+                            onEntityDragEnd={onEntityDragEnd}
+                        />
                     </SceneEntityErrorBoundary>
                 ))}
                 {showEntities && gateEntity ? <GateGlow entity={gateEntity} /> : null}
@@ -1608,6 +1694,7 @@ const LiveProjectScene = forwardRef(function LiveProjectScene({
                         isArActive={isArActive}
                         arTouchElRef={arTouchElRef}
                         enablePointerLock={enablePointerLock}
+                        dragSuppressedRef={entityDragRef}
                     />
                 ) : (
                     <IdleOrbit center={center} />

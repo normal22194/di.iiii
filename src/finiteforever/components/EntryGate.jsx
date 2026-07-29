@@ -8,8 +8,15 @@ export default function EntryGate({ onEnter, isAdmin }) {
     const [visible, setVisible] = useState(true)
     const inputRef = useRef(null)
     // Ref-based focus instead of the autoFocus prop (jsx-a11y/no-autofocus) —
-    // same effect, just not the flagged attribute.
-    useEffect(() => { inputRef.current?.focus() }, [])
+    // same effect, just not the flagged attribute. Skipped on touch devices:
+    // auto-focusing pops the on-screen keyboard immediately, covering half
+    // the card (title, name prompt) before anyone's actually read it — a
+    // desktop keyboard user benefits from landing in the field, a phone
+    // user is better off tapping it deliberately once they've read the card.
+    useEffect(() => {
+        if (window.matchMedia?.('(pointer: coarse)')?.matches) return
+        inputRef.current?.focus()
+    }, [])
 
     const submit = (e) => {
         e.preventDefault()

@@ -4,8 +4,9 @@ import { fetchRitualLog } from '../permanence.js'
 const ACTION_COPY = {
     place: (e) => `${e.actorLabel || 'someone'} placed ${e.targetLabel}`,
     claim: (e) => `${e.actorLabel || 'someone'} chose to keep ${e.targetLabel} forever`,
-    revoke: (e) => `${e.targetLabel} was taken back — permanence moved elsewhere`,
+    revoke: (e) => `${e.actorLabel || 'someone'} chose to let go of ${e.targetLabel} in order to keep ${e.detail?.takenBy || 'their own mark'} forever`,
     release: (e) => `${e.actorLabel || 'someone'} let go of ${e.targetLabel} — its permanence returned to the pool`,
+    delete: (e) => `${e.actorLabel || 'someone'} deleted ${e.targetLabel}`,
     advance: (e) => `the space drifted (${e.detail?.stepped ?? 0} marks)`,
     residue: (e) => `${e.detail?.reachedResidue ?? 0} mark(s) faded away completely`
 }
@@ -21,6 +22,18 @@ export default function RitualLogView({ open, onClose }) {
     const [entries, setEntries] = useState([])
     const [error, setError] = useState(null)
     const sinceRef = useRef(0)
+    const panelRef = useRef(null)
+
+    // pointerdown (not click) so this fires before any other press logic
+    // reacts, same convention as DraggablePanel's own click-outside handling.
+    useEffect(() => {
+        if (!open) return undefined
+        const handlePointerDown = (e) => {
+            if (panelRef.current && !panelRef.current.contains(e.target)) onClose()
+        }
+        document.addEventListener('pointerdown', handlePointerDown)
+        return () => document.removeEventListener('pointerdown', handlePointerDown)
+    }, [open, onClose])
 
     const refresh = useCallback(async () => {
         try {
@@ -47,7 +60,7 @@ export default function RitualLogView({ open, onClose }) {
     if (!open) return null
 
     return (
-        <div className="ff-ritual-log" role="dialog" aria-label="Ritual log">
+        <div ref={panelRef} className="ff-ritual-log" role="dialog" aria-label="Ritual log">
             <header className="ff-ritual-log__header">
                 <span>The ritual remembers</span>
                 <button type="button" className="ff-button ff-button--ghost" onClick={onClose}>Close</button>

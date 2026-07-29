@@ -3,7 +3,7 @@
 // whole mode on/off with Ctrl+Shift+A (or exit with Escape), the same way
 // Studio's own Navigate/Edit mode works — this is a mode, not a panel you
 // manage separately from it.
-export default function AdminModeOverlay({ selectedEntities = [] }) {
+export default function AdminModeOverlay({ selectedEntities = [], onMakePermanent, busy = false }) {
     return (
         <div className="ff-admin-mode">
             <span className="ff-admin-mode__badge">Admin mode</span>
@@ -19,6 +19,17 @@ export default function AdminModeOverlay({ selectedEntities = [] }) {
                             <li key={entity.id}>{entity.name || entity.id}</li>
                         ))}
                     </ul>
+                    {/* Admin override, not the normal ritual claim: no pool cap, no
+                        choosing what to release, and nothing here drifts once
+                        permanent — see claimMarksForever in permanence.js. */}
+                    <button
+                        type="button"
+                        className="ff-button ff-button--ghost ff-admin-mode__make-permanent"
+                        disabled={busy}
+                        onClick={onMakePermanent}
+                    >
+                        Make all permanent
+                    </button>
                     <p className="ff-admin-mode__note">Backspace deletes all of these at once.</p>
                 </>
             )}

@@ -1585,7 +1585,6 @@ registerProjectRoutes(router, {
 })
 
 const { runDriftSweep: runFiniteForeverDriftSweep } = registerFiniteForeverRoutes(router, {
-  requireAdminWrite,
   resolveProjectContext,
   readProjectDocument,
   writeProjectDocument,

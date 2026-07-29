@@ -42,7 +42,6 @@ function makeOpId() {
 }
 
 function registerFiniteForeverRoutes(router, {
-  requireAdminWrite,
   resolveProjectContext,
   readProjectDocument,
   writeProjectDocument,
@@ -177,24 +176,6 @@ function registerFiniteForeverRoutes(router, {
     }
     return result
   }
-
-  // Admin-only manual trigger — forces an immediate recompute instead of
-  // waiting for the next automatic sweep. Real enforcement is this
-  // middleware; the automatic timer in index.js calls runDriftSweep directly,
-  // bypassing HTTP entirely, so it needs no auth of its own.
-  router.post('/api/projects/:projectId/finite-forever/advance-drift', requireAdminWrite, async (req, res, next) => {
-    try {
-      const result = await runDriftSweep(req.params.projectId, {
-        actorLabel: req.authState?.label || req.authState?.subject || 'admin'
-      })
-      if (result.notFound) {
-        return res.status(404).json({ error: 'Project not found.' })
-      }
-      res.json({ ok: true, stepped: result.stepped, reachedResidue: result.reachedResidue, version: result.nextVersion })
-    } catch (error) {
-      next(error)
-    }
-  })
 
   // Participant-writable (same trust level as placing/claiming a mark) —
   // the frontend calls this right after a successful claim/revoke ops batch,

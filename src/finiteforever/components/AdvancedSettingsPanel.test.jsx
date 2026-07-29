@@ -47,12 +47,18 @@ describe('AdvancedSettingsPanel', () => {
 
     it('renames the object via double-click, same as the main edit panel', () => {
         const onRename = vi.fn()
-        render(<AdvancedSettingsPanel entity={makeEntity()} onClose={vi.fn()} onRename={onRename} />)
+        render(<AdvancedSettingsPanel entity={makeEntity()} actorLabel="nooo" onClose={vi.fn()} onRename={onRename} />)
         fireEvent.doubleClick(screen.getByText('Box mark'))
         const input = screen.getByRole('textbox')
         fireEvent.change(input, { target: { value: 'Renamed' } })
         fireEvent.keyDown(input, { key: 'Enter' })
         expect(onRename).toHaveBeenCalledWith('Renamed')
+    })
+
+    it('a non-owner cannot rename via double-click (editing never activates)', () => {
+        render(<AdvancedSettingsPanel entity={makeEntity()} actorLabel="someone else" onClose={vi.fn()} onRename={vi.fn()} />)
+        fireEvent.doubleClick(screen.getByText('Box mark'))
+        expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
     })
 
     it('calls onClose from its own close button', () => {

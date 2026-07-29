@@ -7,11 +7,11 @@ import {
     PAGEABLE_TYPES,
     PAGE_COUNT,
     SHAPE_MARK_TYPES,
-    advanceDrift,
     appendRitualLogEntry,
     buildMarkEntity,
     buildPagesComponent,
     buildPermanenceComponent,
+    claimMarksForever,
     claimPermanence,
     clearPage,
     deleteMark,
@@ -21,6 +21,8 @@ import {
     fetchRitualLog,
     formatRemainingDrift,
     getRemainingDriftMs,
+    isMarkOwner,
+    listPermanentMarks,
     moveMark,
     placeMark,
     placeMediaMark,
@@ -122,6 +124,16 @@ describe('buildMarkEntity', () => {
         expect(entity.components.permanence.placedBy).toBe('someone')
     })
 
+    it('defaults scale to [1,1,1], but accepts an explicit initial scale (transform and drift baseline stay in sync)', () => {
+        const defaulted = buildMarkEntity({ position: [0, 0, 0] })
+        expect(defaulted.components.transform.scale).toEqual([1, 1, 1])
+        expect(defaulted.components.permanence.baseScale).toEqual([1, 1, 1])
+
+        const scaled = buildMarkEntity({ position: [0, 0, 0], scale: [0.3, 0.3, 0.3] })
+        expect(scaled.components.transform.scale).toEqual([0.3, 0.3, 0.3])
+        expect(scaled.components.permanence.baseScale).toEqual([0.3, 0.3, 0.3])
+    })
+
     it('attaches an image media component referencing the asset id', () => {
         const entity = buildMarkEntity({ type: 'image', position: [0, 0, 0], assetId: 'asset-1' })
         expect(entity.components.media).toEqual({ assetId: 'asset-1', fit: 'contain', autoplay: false, loop: false, muted: true })
@@ -203,14 +215,18 @@ describe('placement + fetch', () => {
 })
 
 describe('deleteMark', () => {
-    it('only deletes the entity and does not log when the mark was still drifting', async () => {
+    it('deletes the entity and logs a \'delete\' entry (not a pool release) when the mark was still drifting', async () => {
         submitProjectOps.mockResolvedValue({ document: {}, newVersion: 5 })
+        apiFetch.mockResolvedValue({ ok: true })
         const entity = makeEntity()
         await deleteMark({ document: {}, baseVersion: 4, entity, actorLabel: 'nooo' })
         expect(submitProjectOps).toHaveBeenCalledWith(FINITE_FOREVER_PROJECT_ID, 4, [
             { type: 'deleteEntity', payload: { entityId: 'mark-1' } }
         ])
-        expect(apiFetch).not.toHaveBeenCalled()
+        expect(apiFetch).toHaveBeenCalledWith(`/api/spaces/${FINITE_FOREVER_SPACE_ID}/ritual-log`, {
+            method: 'POST',
+            body: { actorLabel: 'nooo', actorVisible: true, action: 'delete', targetLabel: 'Box mark', detail: { entityId: 'mark-1' } }
+        })
     })
 
     it('frees a pool slot and logs a release when a permanent mark is deleted', async () => {
@@ -245,8 +261,9 @@ describe('deleteMark', () => {
 })
 
 describe('deleteMarks (bulk)', () => {
-    it('batches one deleteEntity op per entity and no pool/log side effects when none were permanent', async () => {
+    it('batches one deleteEntity op per entity and logs one combined \'delete\' entry when none were permanent', async () => {
         submitProjectOps.mockResolvedValue({ document: {}, newVersion: 5 })
+        apiFetch.mockResolvedValue({ ok: true })
         const entities = [
             makeEntity({ id: 'mark-1' }),
             makeEntity({ id: 'mark-2' }),
@@ -259,15 +276,19 @@ describe('deleteMarks (bulk)', () => {
             { type: 'deleteEntity', payload: { entityId: 'mark-2' } },
             { type: 'deleteEntity', payload: { entityId: 'mark-3' } }
         ])
-        expect(apiFetch).not.toHaveBeenCalled()
+        expect(apiFetch).toHaveBeenCalledTimes(1)
+        expect(apiFetch).toHaveBeenCalledWith(`/api/spaces/${FINITE_FOREVER_SPACE_ID}/ritual-log`, {
+            method: 'POST',
+            body: { actorLabel: 'nooo', actorVisible: true, action: 'delete', targetLabel: '3 marks', detail: { count: 3 } }
+        })
     })
 
-    it('combines every permanent mark\'s pool release into one decrement and one ritual log entry', async () => {
+    it('combines every permanent mark\'s pool release into one decrement and logs both a release and a delete entry', async () => {
         submitProjectOps.mockResolvedValue({ document: {}, newVersion: 5 })
         apiFetch.mockResolvedValue({ ok: true })
         const entities = [
             makeEntity({ id: 'mark-1', components: { permanence: { status: 'permanent' } } }),
-            makeEntity({ id: 'mark-2' }), // still drifting — no pool effect
+            makeEntity({ id: 'mark-2' }), // still drifting — no pool effect, logs as 'delete'
             makeEntity({ id: 'mark-3', components: { permanence: { status: 'permanent' } } })
         ]
         const document = { workspaceState: { permanencePool: { total: 5, claimed: 3 } } }
@@ -279,11 +300,9 @@ describe('deleteMarks (bulk)', () => {
             { type: 'deleteEntity', payload: { entityId: 'mark-3' } },
             { type: 'setWorkspaceState', payload: { patch: { permanencePool: { total: 5, claimed: 1 } } } }
         ])
-        expect(apiFetch).toHaveBeenCalledTimes(1)
-        expect(apiFetch).toHaveBeenCalledWith(`/api/spaces/${FINITE_FOREVER_SPACE_ID}/ritual-log`, {
-            method: 'POST',
-            body: { actorLabel: 'nooo', actorVisible: false, action: 'release', targetLabel: '2 marks', detail: { count: 2 } }
-        })
+        expect(apiFetch).toHaveBeenCalledTimes(2)
+        expect(apiFetch.mock.calls[0][1].body).toMatchObject({ action: 'release', targetLabel: '2 marks', detail: { count: 2 } })
+        expect(apiFetch.mock.calls[1][1].body).toMatchObject({ action: 'delete', targetLabel: '1 mark', detail: { count: 1 } })
     })
 
     it('never drops claimed below zero across the combined release', async () => {
@@ -476,12 +495,12 @@ describe('permanence pool + claim planning', () => {
         expect(readPermanencePool({ workspaceState: { permanencePool: { total: '5', claimed: '2' } } })).toEqual({ total: 5, claimed: 2 })
     })
 
-    it('planClaim reports room available and no revoke target under the cap', () => {
+    it('planClaim reports room available and no revoke candidates under the cap', () => {
         const document = { workspaceState: { permanencePool: { total: 3, claimed: 1 } }, entities: [] }
-        expect(planClaim(document)).toEqual({ hasRoom: true, pool: { total: 3, claimed: 1 }, revokeTarget: null })
+        expect(planClaim(document)).toEqual({ hasRoom: true, pool: { total: 3, claimed: 1 }, revokeCandidates: [] })
     })
 
-    it('planClaim picks the longest-held permanent mark to revoke once full', () => {
+    it('planClaim lists every permanent mark, oldest claim first, once full', () => {
         const older = makeEntity({ id: 'old', components: { permanence: { status: 'permanent', claimedAt: 100 } } })
         const newer = makeEntity({ id: 'new', components: { permanence: { status: 'permanent', claimedAt: 200 } } })
         const document = {
@@ -490,14 +509,40 @@ describe('permanence pool + claim planning', () => {
         }
         const plan = planClaim(document)
         expect(plan.hasRoom).toBe(false)
-        expect(plan.revokeTarget.id).toBe('old')
+        expect(plan.revokeCandidates.map((e) => e.id)).toEqual(['old', 'new'])
     })
 
-    it('planClaim returns no revoke target when full but nothing is actually permanent', () => {
+    it('planClaim returns no revoke candidates when full but nothing is actually permanent', () => {
         const document = { workspaceState: { permanencePool: { total: 0, claimed: 0 } }, entities: [] }
         const plan = planClaim(document)
         expect(plan.hasRoom).toBe(false)
-        expect(plan.revokeTarget).toBeNull()
+        expect(plan.revokeCandidates).toEqual([])
+    })
+
+    it('listPermanentMarks filters out drifting marks and sorts by claimedAt', () => {
+        const drifting = makeEntity({ id: 'drifting', components: { permanence: { status: 'drifting' } } })
+        const older = makeEntity({ id: 'old', components: { permanence: { status: 'permanent', claimedAt: 100 } } })
+        const newer = makeEntity({ id: 'new', components: { permanence: { status: 'permanent', claimedAt: 200 } } })
+        expect(listPermanentMarks({ entities: [newer, drifting, older] }).map((e) => e.id)).toEqual(['old', 'new'])
+    })
+})
+
+describe('isMarkOwner', () => {
+    it('matches when actorLabel equals placedBy, case/whitespace-insensitively', () => {
+        expect(isMarkOwner({ permanence: { placedBy: 'nooo' }, actorLabel: '  NoOo  ' })).toBe(true)
+    })
+
+    it('does not match a different actorLabel', () => {
+        expect(isMarkOwner({ permanence: { placedBy: 'nooo' }, actorLabel: 'someone else' })).toBe(false)
+    })
+
+    it('admins always count as the owner, regardless of actorLabel', () => {
+        expect(isMarkOwner({ permanence: { placedBy: 'nooo' }, actorLabel: 'someone else', isAdmin: true })).toBe(true)
+    })
+
+    it('is false with no actorLabel or no placedBy', () => {
+        expect(isMarkOwner({ permanence: { placedBy: 'nooo' }, actorLabel: '' })).toBe(false)
+        expect(isMarkOwner({ permanence: {}, actorLabel: 'nooo' })).toBe(false)
     })
 })
 
@@ -521,14 +566,35 @@ describe('claimPermanence', () => {
         }))
     })
 
-    it('revokes the longest-held mark and logs both a revoke and a claim when full', async () => {
-        submitProjectOps.mockResolvedValue({ document: {}, newVersion: 9 })
-        apiFetch.mockResolvedValue({ ok: true })
+    it('rejects a claim into a full pool with no chosen revoke target', async () => {
         const held = makeEntity({ id: 'held', name: 'Held mark', components: { permanence: { status: 'permanent', claimedAt: 50 } } })
         const entity = makeEntity({ id: 'new-mark' })
         const document = { workspaceState: { permanencePool: { total: 1, claimed: 1 } }, entities: [held] }
 
-        const { hasRoom, revokeTarget } = await claimPermanence({ document, baseVersion: 8, entity, actorLabel: 'nooo' })
+        await expect(claimPermanence({ document, baseVersion: 8, entity, actorLabel: 'nooo' })).rejects.toThrow()
+        expect(submitProjectOps).not.toHaveBeenCalled()
+    })
+
+    it('rejects a revokeTargetId that is not currently permanent (stale choice)', async () => {
+        const drifting = makeEntity({ id: 'drifting-mark', components: { permanence: { status: 'drifting' } } })
+        const entity = makeEntity({ id: 'new-mark' })
+        const document = { workspaceState: { permanencePool: { total: 1, claimed: 1 } }, entities: [drifting] }
+
+        await expect(claimPermanence({ document, baseVersion: 8, entity, actorLabel: 'nooo', revokeTargetId: 'drifting-mark' })).rejects.toThrow()
+        expect(submitProjectOps).not.toHaveBeenCalled()
+    })
+
+    it('revokes the chosen mark and logs both a revoke and a claim when full', async () => {
+        submitProjectOps.mockResolvedValue({ document: {}, newVersion: 9 })
+        apiFetch.mockResolvedValue({ ok: true })
+        const held = makeEntity({ id: 'held', name: 'Held mark', components: { permanence: { status: 'permanent', claimedAt: 50 } } })
+        const otherHeld = makeEntity({ id: 'other-held', name: 'Other mark', components: { permanence: { status: 'permanent', claimedAt: 10 } } })
+        const entity = makeEntity({ id: 'new-mark' })
+        const document = { workspaceState: { permanencePool: { total: 2, claimed: 2 } }, entities: [held, otherHeld] }
+
+        // Deliberately choosing the *newer* claim (not the oldest) — this is
+        // the claimant's choice, not an automatic pick.
+        const { hasRoom, revokeTarget } = await claimPermanence({ document, baseVersion: 8, entity, actorLabel: 'nooo', revokeTargetId: 'held' })
 
         expect(hasRoom).toBe(false)
         expect(revokeTarget.id).toBe('held')
@@ -540,6 +606,56 @@ describe('claimPermanence', () => {
         expect(apiFetch).toHaveBeenCalledTimes(2)
         expect(apiFetch.mock.calls[0][1].body).toMatchObject({ action: 'revoke', targetLabel: 'Held mark' })
         expect(apiFetch.mock.calls[1][1].body).toMatchObject({ action: 'claim' })
+    })
+})
+
+describe('claimMarksForever (admin bulk override)', () => {
+    it('claims every non-permanent selected mark and grows the pool by that count, uncapped', async () => {
+        submitProjectOps.mockResolvedValue({ document: {}, newVersion: 12 })
+        apiFetch.mockResolvedValue({ ok: true })
+        const a = makeEntity({ id: 'a', components: { permanence: { status: 'drifting' } } })
+        const b = makeEntity({ id: 'b', components: { permanence: { status: 'drifting' } } })
+        const document = { workspaceState: { permanencePool: { total: 1, claimed: 1 } }, entities: [a, b] }
+
+        const result = await claimMarksForever({ document, baseVersion: 5, entities: [a, b], actorLabel: 'admin', actorVisible: true })
+
+        expect(result).toEqual({ document: {}, newVersion: 12 })
+        const [, , ops] = submitProjectOps.mock.calls[0]
+        expect(ops).toHaveLength(3)
+        expect(ops[0]).toMatchObject({ type: 'updateComponent', payload: { entityId: 'a', component: 'permanence', patch: { status: 'permanent', claimedBy: 'admin' } } })
+        expect(ops[1]).toMatchObject({ type: 'updateComponent', payload: { entityId: 'b', component: 'permanence', patch: { status: 'permanent', claimedBy: 'admin' } } })
+        // Pool was already full (1/1) — this still succeeds and pushes claimed
+        // past total, since the admin override has no cap.
+        expect(ops[2]).toEqual({ type: 'setWorkspaceState', payload: { patch: { permanencePool: { total: 1, claimed: 3 } } } })
+        expect(apiFetch).toHaveBeenCalledWith(`/api/spaces/${FINITE_FOREVER_SPACE_ID}/ritual-log`, expect.objectContaining({
+            body: expect.objectContaining({ action: 'claim', targetLabel: '2 marks', detail: { count: 2, bulk: true } })
+        }))
+    })
+
+    it('skips marks already permanent and only counts the rest', async () => {
+        submitProjectOps.mockResolvedValue({ document: {}, newVersion: 12 })
+        apiFetch.mockResolvedValue({ ok: true })
+        const already = makeEntity({ id: 'already', components: { permanence: { status: 'permanent', claimedAt: 1 } } })
+        const drifting = makeEntity({ id: 'drifting', components: { permanence: { status: 'drifting' } } })
+        const document = { workspaceState: { permanencePool: { total: 5, claimed: 1 } }, entities: [already, drifting] }
+
+        await claimMarksForever({ document, baseVersion: 5, entities: [already, drifting], actorLabel: 'admin' })
+
+        const [, , ops] = submitProjectOps.mock.calls[0]
+        expect(ops).toHaveLength(2)
+        expect(ops[0].payload.entityId).toBe('drifting')
+        expect(ops[1]).toEqual({ type: 'setWorkspaceState', payload: { patch: { permanencePool: { total: 5, claimed: 2 } } } })
+    })
+
+    it('is a no-op (no network call) when everything selected is already permanent', async () => {
+        const already = makeEntity({ id: 'already', components: { permanence: { status: 'permanent', claimedAt: 1 } } })
+        const document = { workspaceState: { permanencePool: { total: 5, claimed: 1 } }, entities: [already] }
+
+        const result = await claimMarksForever({ document, baseVersion: 5, entities: [already], actorLabel: 'admin' })
+
+        expect(result).toEqual({ document, newVersion: 5 })
+        expect(submitProjectOps).not.toHaveBeenCalled()
+        expect(apiFetch).not.toHaveBeenCalled()
     })
 })
 
@@ -560,11 +676,5 @@ describe('ritual log + admin actions', () => {
 
         apiFetch.mockResolvedValueOnce({})
         expect(await fetchRitualLog()).toEqual([])
-    })
-
-    it('advanceDrift posts to the admin drift-advance endpoint', async () => {
-        apiFetch.mockResolvedValue({ swept: 4 })
-        await advanceDrift()
-        expect(apiFetch).toHaveBeenCalledWith(`/api/projects/${FINITE_FOREVER_PROJECT_ID}/finite-forever/advance-drift`, { method: 'POST' })
     })
 })

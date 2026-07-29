@@ -8,7 +8,7 @@
 const crypto = require('node:crypto')
 const { getDb } = require('./db')
 
-const ACTIONS = new Set(['place', 'claim', 'revoke', 'advance', 'residue', 'release'])
+const ACTIONS = new Set(['place', 'claim', 'revoke', 'advance', 'residue', 'release', 'delete'])
 
 // actorVisible is stored as-authored (never overwritten later) — masking for
 // non-admin readers happens at read time (see the GET route in

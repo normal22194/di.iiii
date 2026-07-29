@@ -81,10 +81,9 @@ export function buildPagesComponent() {
 // it deliberately never carries the placer's identity (that lives only in
 // permanence.placedBy/placedByVisible, masked per-viewer server-side). "Mark
 // by <name>" would leak a hidden name to everyone the instant it was placed.
-export function buildMarkEntity({ type = 'box', position, actorLabel, actorVisible = true, assetId = null }) {
+export function buildMarkEntity({ type = 'box', position, actorLabel, actorVisible = true, assetId = null, scale = [1, 1, 1] }) {
     const id = `mark-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
     const appearance = { color: '#9fd8ff', opacity: 1 }
-    const scale = [1, 1, 1]
     const components = {
         transform: { position, rotation: [0, 0, 0], scale },
         appearance,
@@ -111,6 +110,20 @@ export function buildMarkEntity({ type = 'box', position, actorLabel, actorVisib
     }
 }
 
+// Normal rule: a participant may only edit/move/recolor/delete a mark they
+// placed — admins are exempt, and so is the one sanctioned exception
+// (choosing which permanent mark to release when claiming into a full pool,
+// see claimPermanence). A soft, client-side check: this app's identity is a
+// self-declared display name remembered per device, not an authenticated
+// account, so it's not spoof-proof — same trust model already established
+// for Pages ownership (see AdvancedSettingsPanel.jsx).
+export function isMarkOwner({ permanence, actorLabel, isAdmin = false }) {
+    if (isAdmin) return true
+    const placedBy = permanence?.placedBy
+    return Boolean(actorLabel) && Boolean(placedBy) &&
+        actorLabel.trim().toLowerCase() === placedBy.trim().toLowerCase()
+}
+
 // Uploads through the same content-addressed asset pipeline every other
 // project uses (dedupes identical bytes) — no server changes needed.
 export const uploadMarkAsset = (file) => uploadProjectAsset(FINITE_FOREVER_PROJECT_ID, file)
@@ -135,9 +148,9 @@ export async function placeMark({ baseVersion, entity }) {
 
 // Deleting a mark that was permanent frees its slot back to the shared pool
 // — otherwise the pool would only ever shrink, never regrow, as pieces come
-// and go. Deleting a mark that was only drifting (never claimed) is treated
-// as an unremarkable "oops" undo and isn't logged; deleting a permanent one
-// is a real act of letting go, so it's logged as 'release'.
+// and go. Every deletion is logged so the ritual log has a complete "who
+// deleted what" record, not just the permanent ones — a plain drifting mark
+// logs as 'delete', a permanent one (a real act of letting go) as 'release'.
 export async function deleteMark({ document, baseVersion, entity, actorLabel, actorVisible = true }) {
     const wasPermanent = entity?.components?.permanence?.status === 'permanent'
     const ops = [{ type: 'deleteEntity', payload: { entityId: entity.id } }]
@@ -152,29 +165,34 @@ export async function deleteMark({ document, baseVersion, entity, actorLabel, ac
 
     const result = await submitProjectOps(FINITE_FOREVER_PROJECT_ID, baseVersion, ops)
 
-    if (wasPermanent) {
-        await appendRitualLogEntry({
-            actorLabel,
-            actorVisible,
-            action: 'release',
-            targetLabel: entity.name || entity.id,
-            detail: { entityId: entity.id }
-        })
-    }
+    await appendRitualLogEntry({
+        actorLabel,
+        actorVisible,
+        action: wasPermanent ? 'release' : 'delete',
+        targetLabel: entity.name || entity.id,
+        detail: { entityId: entity.id }
+    })
 
     return result
 }
 
 // Bulk version of deleteMark, for admin mode's box-select — one batched op
-// submission instead of N separate round-trips, and any permanent marks in
-// the selection free their pool slots together (one combined decrement, one
-// combined ritual log entry) rather than one op/entry per mark.
+// submission instead of N separate round-trips. Permanent marks in the
+// selection free their pool slots and log as one combined 'release'; the
+// rest log as one combined 'delete' — same per-type combining as the pool
+// decrement, so a mixed bulk-delete produces at most two log entries, not
+// one per mark.
 export async function deleteMarks({ document, baseVersion, entities, actorLabel, actorVisible = true }) {
     const ops = []
     let permanentReleased = 0
+    let plainDeleted = 0
     for (const entity of entities) {
         ops.push({ type: 'deleteEntity', payload: { entityId: entity.id } })
-        if (entity?.components?.permanence?.status === 'permanent') permanentReleased += 1
+        if (entity?.components?.permanence?.status === 'permanent') {
+            permanentReleased += 1
+        } else {
+            plainDeleted += 1
+        }
     }
 
     if (permanentReleased > 0) {
@@ -194,6 +212,15 @@ export async function deleteMarks({ document, baseVersion, entities, actorLabel,
             action: 'release',
             targetLabel: `${permanentReleased} mark${permanentReleased === 1 ? '' : 's'}`,
             detail: { count: permanentReleased }
+        })
+    }
+    if (plainDeleted > 0) {
+        await appendRitualLogEntry({
+            actorLabel,
+            actorVisible,
+            action: 'delete',
+            targetLabel: `${plainDeleted} mark${plainDeleted === 1 ? '' : 's'}`,
+            detail: { count: plainDeleted }
         })
     }
 
@@ -314,26 +341,43 @@ export function readPermanencePool(document) {
     }
 }
 
-// Deterministic v1 rule: revoke from whoever claimed longest ago.
-function findRevokeTarget(document) {
-    const permanentEntities = (document?.entities || [])
+// Every mark currently holding permanence, oldest claim first — this is the
+// full candidate list a claimant picks from once the pool is full (see
+// ClaimPrompt's revoke picker). Order is display convenience only now
+// (longest-held listed first); the choice of which one to give up belongs to
+// the person claiming, not to this function.
+export function listPermanentMarks(document) {
+    return (document?.entities || [])
         .filter((entity) => entity?.components?.permanence?.status === 'permanent')
         .sort((a, b) => (a.components.permanence.claimedAt || 0) - (b.components.permanence.claimedAt || 0))
-    return permanentEntities[0] || null
 }
 
 export function planClaim(document) {
     const pool = readPermanencePool(document)
     const hasRoom = pool.claimed < pool.total
-    return { hasRoom, pool, revokeTarget: hasRoom ? null : findRevokeTarget(document) }
+    return { hasRoom, pool, revokeCandidates: hasRoom ? [] : listPermanentMarks(document) }
 }
 
-export async function claimPermanence({ document, baseVersion, entity, actorLabel, actorVisible = true }) {
-    const { hasRoom, pool, revokeTarget } = planClaim(document)
+// Normal rule: nobody may claim into a full pool without deliberately giving
+// up someone else's permanence first — this is the one sanctioned way a
+// participant is allowed to touch a mark they didn't place (see
+// isMarkOwner, which locks out every other edit). `revokeTargetId` must name
+// a currently-permanent mark the UI already offered the claimant as a choice
+// (built from listPermanentMarks/planClaim); a missing/stale id throws
+// rather than silently picking one for them.
+export async function claimPermanence({ document, baseVersion, entity, actorLabel, actorVisible = true, revokeTargetId = null }) {
+    const { hasRoom, pool } = planClaim(document)
     const now = Date.now()
     const ops = []
+    let revokeTarget = null
 
-    if (revokeTarget) {
+    if (!hasRoom) {
+        revokeTarget = (document?.entities || []).find((e) => (
+            e.id === revokeTargetId && e.components?.permanence?.status === 'permanent'
+        )) || null
+        if (!revokeTarget) {
+            throw new Error('Choose a permanent mark to let go of before claiming this one.')
+        }
         ops.push({
             type: 'updateComponent',
             payload: {
@@ -380,6 +424,49 @@ export async function claimPermanence({ document, baseVersion, entity, actorLabe
     return { result, hasRoom, revokeTarget }
 }
 
+// Admin-only override for admin mode's box-select: makes every selected
+// mark permanent in one batched request, with no cap and no choice — unlike
+// claimPermanence (the normal, capped, "pick something to let go of" flow
+// everyone else uses). pool.claimed still increments for every mark this
+// actually claims, so deleteMark/deleteMarks's existing decrement stays
+// correct later — but claimed is allowed to exceed total; there's no revoke
+// step and no pool-full rejection here. Marks already permanent in the
+// selection are skipped (nothing to do); a selection that's entirely
+// already-permanent is a no-op, not an error.
+export async function claimMarksForever({ document, baseVersion, entities, actorLabel, actorVisible = true }) {
+    const targets = (entities || []).filter((entity) => entity?.components?.permanence?.status !== 'permanent')
+    if (targets.length === 0) {
+        return { document, newVersion: baseVersion }
+    }
+
+    const now = Date.now()
+    const pool = readPermanencePool(document)
+    const ops = targets.map((entity) => ({
+        type: 'updateComponent',
+        payload: {
+            entityId: entity.id,
+            component: 'permanence',
+            patch: { status: 'permanent', claimedBy: actorLabel || 'someone', claimedByVisible: actorVisible, claimedAt: now }
+        }
+    }))
+    ops.push({
+        type: 'setWorkspaceState',
+        payload: { patch: { permanencePool: { total: pool.total, claimed: pool.claimed + targets.length } } }
+    })
+
+    const result = await submitProjectOps(FINITE_FOREVER_PROJECT_ID, baseVersion, ops)
+
+    await appendRitualLogEntry({
+        actorLabel,
+        actorVisible,
+        action: 'claim',
+        targetLabel: `${targets.length} mark${targets.length === 1 ? '' : 's'}`,
+        detail: { count: targets.length, bulk: true }
+    })
+
+    return result
+}
+
 export async function appendRitualLogEntry({ actorLabel = '', actorVisible = true, action, targetLabel = '', detail = {} }) {
     return apiFetch(`/api/spaces/${FINITE_FOREVER_SPACE_ID}/ritual-log`, {
         method: 'POST',
@@ -390,10 +477,4 @@ export async function appendRitualLogEntry({ actorLabel = '', actorVisible = tru
 export async function fetchRitualLog(since = 0) {
     const data = await apiFetch(`/api/spaces/${FINITE_FOREVER_SPACE_ID}/ritual-log?since=${since}`)
     return data.entries || []
-}
-
-export async function advanceDrift() {
-    return apiFetch(`/api/projects/${FINITE_FOREVER_PROJECT_ID}/finite-forever/advance-drift`, {
-        method: 'POST'
-    })
 }

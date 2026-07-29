@@ -28,6 +28,31 @@ describe('ImportWindow', () => {
         expect(onImportFile).toHaveBeenCalledWith(expect.objectContaining({ name: 'statue.glb' }), 'model')
     })
 
+    it('accepts a .obj model by extension even without a matching mime type', () => {
+        const onImportFile = vi.fn()
+        render(<ImportWindow open onClose={vi.fn()} onImportFile={onImportFile} />)
+        const input = document.querySelector('input[type="file"]')
+        fireEvent.change(input, { target: { files: [fileOf('statue.obj', '')] } })
+        expect(onImportFile).toHaveBeenCalledWith(expect.objectContaining({ name: 'statue.obj' }), 'model')
+    })
+
+    it('accepts a .stl model by extension even without a matching mime type', () => {
+        const onImportFile = vi.fn()
+        render(<ImportWindow open onClose={vi.fn()} onImportFile={onImportFile} />)
+        const input = document.querySelector('input[type="file"]')
+        fireEvent.change(input, { target: { files: [fileOf('statue.stl', '')] } })
+        expect(onImportFile).toHaveBeenCalledWith(expect.objectContaining({ name: 'statue.stl' }), 'model')
+    })
+
+    it('rejects an .fbx model — supported by the shared renderer, but not offered here', () => {
+        const onImportFile = vi.fn()
+        render(<ImportWindow open onClose={vi.fn()} onImportFile={onImportFile} />)
+        const input = document.querySelector('input[type="file"]')
+        fireEvent.change(input, { target: { files: [fileOf('statue.fbx', '')] } })
+        expect(onImportFile).not.toHaveBeenCalled()
+        expect(screen.getByText(/Unsupported file/)).toBeInTheDocument()
+    })
+
     it('rejects an unsupported file type with an inline error, without calling onImportFile', () => {
         const onImportFile = vi.fn()
         render(<ImportWindow open onClose={vi.fn()} onImportFile={onImportFile} />)

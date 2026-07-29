@@ -6,6 +6,11 @@ const MARK_TYPES = [
     { key: 'text', label: 'Text' }
 ]
 
+// Places with the default color immediately — FiniteForeverExperience opens
+// the just-placed mark's edit menu (ClaimPrompt) right after, which already
+// has a live color swatch. Choosing a color there recolors the real object
+// in the scene as you pick, instead of choosing blind against a flat swatch
+// before the mark even exists.
 export default function PlacementPanel({ onPlace, onImportClick, disabled }) {
     return (
         <div className="ff-placement">

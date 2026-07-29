@@ -7,18 +7,21 @@ import AdvancedSettingsPanel from './components/AdvancedSettingsPanel.jsx'
 import AdminModeOverlay from './components/AdminModeOverlay.jsx'
 import PoolHud from './components/PoolHud.jsx'
 import RitualLogView from './components/RitualLogView.jsx'
-import AdvanceDriftControl from './components/AdvanceDriftControl.jsx'
 import EntryGate from './components/EntryGate.jsx'
 import { clearIdentity, readStoredIdentity, storeIdentity } from './identity.js'
+import { prepareObjImport, prepareStlImport } from './modelImportProcessing.js'
+import { MODEL_FORMATS, detectModelFormatFromFile } from '../utils/modelFormats.js'
 import {
     FINITE_FOREVER_PROJECT_ID,
     buildMarkEntity,
+    claimMarksForever,
     claimPermanence,
     clearPage,
     deleteMark,
     deleteMarks,
     duplicateMark,
     fetchFiniteForeverDocument,
+    isMarkOwner,
     moveMark,
     placeMark,
     placeMediaMark,
@@ -32,8 +35,7 @@ import {
     setMarkText,
     uploadMarkAsset,
     uploadPageAsset,
-    appendRitualLogEntry,
-    advanceDrift
+    appendRitualLogEntry
 } from './permanence.js'
 import './finiteForeverExperience.css'
 
@@ -46,6 +48,12 @@ export default function FiniteForeverExperience() {
     const { role } = useAuthSession()
     const isAdmin = role === 'admin'
     const viewerRef = useRef(null)
+    // On phone, placing/importing/pasting a mark no longer auto-opens its
+    // edit menu — the mark just appears, and the menu (a compact bottom
+    // sheet, see DraggablePanel/ClaimPrompt) only opens when you double-tap
+    // it, same as reopening an already-placed mark. Desktop keeps the
+    // existing "opens right after you place it" flow.
+    const [isTouch] = useState(() => Boolean(window.matchMedia?.('(pointer: coarse)')?.matches))
 
     // Entry gate: a name is required to do anything here — "hidden" only
     // controls whether *other visitors* see it (admins always do, both by
@@ -54,6 +62,16 @@ export default function FiniteForeverExperience() {
     const [identity, setIdentity] = useState(() => readStoredIdentity())
     const actorLabel = identity?.username || 'a visitor'
     const actorVisible = isAdmin ? true : (identity?.visible ?? true)
+    // Normal rule: only a mark's placer (or an admin) may edit/move/recolor/
+    // rename/delete it — checked here (not just via disabled buttons in
+    // ClaimPrompt/AdvancedSettingsPanel) so a global keyboard shortcut like
+    // Backspace-delete can't bypass a disabled control. The one sanctioned
+    // exception, claiming into a full pool by choosing someone else's
+    // permanent mark to release, goes through claimPermanence directly and
+    // isn't gated by this.
+    const canEditEntity = useCallback((target) => (
+        isMarkOwner({ permanence: target?.components?.permanence, actorLabel, isAdmin })
+    ), [actorLabel, isAdmin])
     const handleEnter = useCallback((next) => {
         storeIdentity(next)
         setIdentity(next)
@@ -79,6 +97,16 @@ export default function FiniteForeverExperience() {
     // from it, no manual patching required.
     const [selectedEntityId, setSelectedEntityId] = useState(null)
     const pendingEntity = doc?.entities?.find((e) => e.id === selectedEntityId) || null
+    // Candidates ClaimPrompt's revoke picker offers once the pool is full —
+    // every other currently-permanent mark (never the one being claimed;
+    // it can't already be permanent while its own ClaimPrompt is asking
+    // whether to claim it).
+    const permanentMarks = useMemo(
+        () => (doc?.entities || []).filter((e) => (
+            e.components?.permanence?.status === 'permanent' && e.id !== pendingEntity?.id
+        )),
+        [doc, pendingEntity]
+    )
     const [advancedEntityId, setAdvancedEntityId] = useState(null)
     const advancedEntity = doc?.entities?.find((e) => e.id === advancedEntityId) || null
     // Selecting a genuinely different mark closes Advanced (it's specific to
@@ -110,6 +138,15 @@ export default function FiniteForeverExperience() {
     const marqueeSelectedEntities = useMemo(
         () => doc?.entities?.filter((e) => marqueeSelectedIds.includes(e.id)) || [],
         [doc, marqueeSelectedIds]
+    )
+    // Selection ring visibility: admin mode's box-select AND whichever single
+    // mark is currently open in the main edit menu both get one — previously
+    // only the box-select ids reached LiveProjectScene's selectedEntityIds,
+    // so double-clicking a mark opened its edit menu with no visual
+    // indication in the 3D view of which one you were actually editing.
+    const selectedEntityIds = useMemo(
+        () => (pendingEntity ? [...marqueeSelectedIds, pendingEntity.id] : marqueeSelectedIds),
+        [marqueeSelectedIds, pendingEntity]
     )
 
     // Text editing is the one field that needs to show a keystroke
@@ -199,6 +236,7 @@ export default function FiniteForeverExperience() {
             rotationChainRef.current = null
             opacityChainRef.current = null
             textChainRef.current = null
+            viewportDragBeforeRef.current = null
             // Otherwise the text field would keep showing what you'd typed
             // locally instead of the just-resynced server value.
             setTextOverride(null)
@@ -324,7 +362,7 @@ export default function FiniteForeverExperience() {
             setDoc(response.document)
             setVersion(response.newVersion)
             await appendRitualLogEntry({ actorLabel, actorVisible, action: 'place', targetLabel: entity.name, detail: { entityId: entity.id } })
-            setSelectedEntityId(entity.id)
+            if (!isTouch) setSelectedEntityId(entity.id)
             pushUndo({ kind: 'place', entityId: entity.id, entitySnapshot: entity })
             setError(null)
         } catch (err) {
@@ -332,25 +370,48 @@ export default function FiniteForeverExperience() {
         } finally {
             setBusy(false)
         }
-    }, [doc, version, busy, actorLabel, actorVisible, handleOpError, getSpawnPosition, pushUndo])
+    }, [doc, version, busy, actorLabel, actorVisible, isTouch, handleOpError, getSpawnPosition, pushUndo])
 
     // Import: upload the file, register it as a document asset, then create
     // the entity in one batch (placeMediaMark) — same follow-on flow as a
     // normal placement (log it, open its edit menu) once that succeeds.
+    // STL/OBJ specifically get a client-side pass first (see
+    // modelImportProcessing.js): neither format carries a unit convention
+    // of its own, so a raw CAD-scale import can render as an invisible
+    // speck or a view-filling wall, and neither caps triangle count the
+    // way most GLTF exporters already do. GLTF/GLB/image imports are
+    // untouched — this only ever runs for the two formats it's built for.
     const handleImportFile = useCallback(async (file, type) => {
         if (!doc || busy) return
         setBusy(true)
         setImportError(null)
         try {
-            const asset = await uploadMarkAsset(file)
+            let uploadFile = file
+            let initialScale = null
+            if (type === 'model') {
+                const format = detectModelFormatFromFile(file)
+                if (format === MODEL_FORMATS.STL) {
+                    ({ file: uploadFile, scale: initialScale } = await prepareStlImport(file))
+                } else if (format === MODEL_FORMATS.OBJ) {
+                    ({ file: uploadFile, scale: initialScale } = await prepareObjImport(file))
+                }
+            }
+            const asset = await uploadMarkAsset(uploadFile)
             const position = getSpawnPosition()
-            const entity = buildMarkEntity({ type, position, actorLabel, actorVisible, assetId: asset.id })
+            const entity = buildMarkEntity({
+                type,
+                position,
+                actorLabel,
+                actorVisible,
+                assetId: asset.id,
+                scale: initialScale ? [initialScale, initialScale, initialScale] : undefined
+            })
             const response = await placeMediaMark({ baseVersion: version, entity, asset })
             setDoc(response.document)
             setVersion(response.newVersion)
             await appendRitualLogEntry({ actorLabel, actorVisible, action: 'place', targetLabel: entity.name, detail: { entityId: entity.id } })
             setImportOpen(false)
-            setSelectedEntityId(entity.id)
+            if (!isTouch) setSelectedEntityId(entity.id)
             // Redo re-places via plain createEntity (no re-upload) — the
             // asset stays registered in doc.assets across an undo, since
             // undo only removes the entity, not the asset it references.
@@ -365,9 +426,9 @@ export default function FiniteForeverExperience() {
         } finally {
             setBusy(false)
         }
-    }, [doc, version, busy, actorLabel, actorVisible, handleOpError, getSpawnPosition, pushUndo])
+    }, [doc, version, busy, actorLabel, actorVisible, isTouch, handleOpError, getSpawnPosition, pushUndo])
 
-    const handleConfirmClaim = useCallback(async () => {
+    const handleConfirmClaim = useCallback(async (revokeTargetId) => {
         if (!doc || !pendingEntity || busy) return
         setBusy(true)
         try {
@@ -376,7 +437,8 @@ export default function FiniteForeverExperience() {
                 baseVersion: version,
                 entity: pendingEntity,
                 actorLabel,
-                actorVisible
+                actorVisible,
+                revokeTargetId
             })
             setDoc(result.document)
             setVersion(result.newVersion)
@@ -389,7 +451,14 @@ export default function FiniteForeverExperience() {
         }
     }, [doc, version, pendingEntity, busy, actorLabel, actorVisible, handleOpError])
 
-    const handleDismissClaim = useCallback(() => setSelectedEntityId(null), [])
+    // Guarded against the exact moment a gizmo drag starts (see
+    // isViewportDraggingRef above) — grabbing an axis handle is a
+    // pointerdown on the 3D canvas, which DraggablePanel's click-outside
+    // detection would otherwise treat as dismissing this very panel.
+    const handleDismissClaim = useCallback(() => {
+        if (isViewportDraggingRef.current) return
+        setSelectedEntityId(null)
+    }, [])
 
     // Double-click an already-placed mark to reopen the same menu for it —
     // not just right after placing. Guarded to Finite Forever's own marks
@@ -400,7 +469,7 @@ export default function FiniteForeverExperience() {
     }, [busy])
 
     const handleRecolor = useCallback(async (color) => {
-        if (!pendingEntity || busy) return
+        if (!pendingEntity || busy || !canEditEntity(pendingEntity)) return
         const before = pendingEntity.components.appearance?.color
         setBusy(true)
         try {
@@ -414,14 +483,14 @@ export default function FiniteForeverExperience() {
         } finally {
             setBusy(false)
         }
-    }, [pendingEntity, version, busy, handleOpError, pushUndo])
+    }, [pendingEntity, version, busy, canEditEntity, handleOpError, pushUndo])
 
     // Shared by the main edit window (renaming pendingEntity) and Advanced
     // (which may be showing a *different* mark than the main window, or be
     // open with the main window already closed) — the caller always passes
     // the specific entity being renamed rather than this closing over one.
     const handleRename = useCallback(async (entity, name) => {
-        if (!entity || busy) return
+        if (!entity || busy || !canEditEntity(entity)) return
         const before = entity.name
         setBusy(true)
         try {
@@ -435,7 +504,7 @@ export default function FiniteForeverExperience() {
         } finally {
             setBusy(false)
         }
-    }, [busy, version, handleOpError, pushUndo])
+    }, [busy, version, canEditEntity, handleOpError, pushUndo])
 
     // Pages only ever show in the Advanced window, and Advanced can be
     // showing a mark the main window doesn't currently have open (or isn't
@@ -482,7 +551,7 @@ export default function FiniteForeverExperience() {
     // (absolute value) — both just need "here's axis i's new number". Each
     // nudge is its own undo step.
     const commitAxisPosition = useCallback(async (axisIndex, computeNext) => {
-        if (!pendingEntity || busy) return
+        if (!pendingEntity || busy || !canEditEntity(pendingEntity)) return
         setBusy(true)
         try {
             const currentPosition = pendingEntity.components.transform?.position || [0, 0, 0]
@@ -497,11 +566,16 @@ export default function FiniteForeverExperience() {
         } finally {
             setBusy(false)
         }
-    }, [pendingEntity, version, busy, handleOpError, pushUndo])
+    }, [pendingEntity, version, busy, canEditEntity, handleOpError, pushUndo])
 
     const handleNudge = useCallback((axisIndex, delta) => (
         commitAxisPosition(axisIndex, (current) => current + delta)
     ), [commitAxisPosition])
+
+    // "Ground" — snaps Y back to 0 (the grid plane every new mark already
+    // spawns on, see getSpawnPosition) without touching X/Z, for a mark
+    // that's drifted off-height via manual Y edits or a viewport drag.
+    const handleGround = useCallback(() => commitAxisPosition(1, () => 0), [commitAxisPosition])
 
     // Drag-to-scrub needs to move the object live, tick by tick, as fast as
     // the network allows — a plain useCallback re-submitting from React state
@@ -514,7 +588,7 @@ export default function FiniteForeverExperience() {
     // was most recent when it completes. The whole drag collapses to exactly
     // one undo step too — before is captured once, at drag start.
     const handleAxisDragChange = useCallback((axisIndex, value) => {
-        if (!pendingEntity) return
+        if (!pendingEntity || !canEditEntity(pendingEntity)) return
         let chain = dragChainRef.current
         if (!chain || chain.entityId !== pendingEntity.id) {
             const startPosition = [...(pendingEntity.components.transform?.position || [0, 0, 0])]
@@ -555,14 +629,62 @@ export default function FiniteForeverExperience() {
                 pushUndo({ kind: 'position', entityId: chain.entityId, before: chain.before, after: chain.position })
             }
         })()
-    }, [pendingEntity, version, handleOpError, pushUndo])
+    }, [pendingEntity, version, canEditEntity, handleOpError, pushUndo])
+
+    // Viewport click-drag-to-reposition via LiveProjectScene's TransformControls
+    // gizmo — it's only ever offered on whichever mark is passed as
+    // draggableEntityId (see the render below), already gated to the
+    // currently-open, owned mark. Dragging itself is local/instant (the
+    // gizmo moves the real Three.js object directly, no network round trip
+    // per frame) — only the final position needs a single moveMark commit,
+    // unlike the axis-scrub sliders' network-paced chains above.
+    const viewportDragBeforeRef = useRef(null)
+    // Grabbing a gizmo handle is a pointerdown on the 3D canvas, which is
+    // "outside" the ClaimPrompt panel's own DOM node as far as
+    // DraggablePanel's click-outside detection is concerned — without this
+    // guard, the very act of starting a drag dismissed the panel (and with
+    // it, the gizmo itself) before the drag could ever move anything. See
+    // handleDismissClaim below, which checks this synchronously: the
+    // gizmo's own pointerdown handling (and this ref update) always runs
+    // before the event bubbles up to DraggablePanel's document-level listener.
+    const isViewportDraggingRef = useRef(false)
+
+    const handleViewportDragStart = useCallback((entity) => {
+        if (!entity || !canEditEntity(entity)) return
+        isViewportDraggingRef.current = true
+        viewportDragBeforeRef.current = {
+            entityId: entity.id,
+            before: [...(entity.components.transform?.position || [0, 0, 0])]
+        }
+    }, [canEditEntity])
+
+    const handleViewportDragEnd = useCallback(async (entityId, position) => {
+        isViewportDraggingRef.current = false
+        const captured = viewportDragBeforeRef.current
+        viewportDragBeforeRef.current = null
+        if (!captured || captured.entityId !== entityId) return
+        setBusy(true)
+        try {
+            const response = await moveMark({ baseVersion: version, entityId, position })
+            setDoc(response.document)
+            setVersion(response.newVersion)
+            if (position.some((value, i) => value !== captured.before[i])) {
+                pushUndo({ kind: 'position', entityId, before: captured.before, after: position })
+            }
+            setError(null)
+        } catch (err) {
+            handleOpError(err, 'Could not move that mark.')
+        } finally {
+            setBusy(false)
+        }
+    }, [version, handleOpError, pushUndo])
 
     // Scale — mirrors handleNudge/handleAxisDragChange above, but also
     // re-baselines permanence.baseScale (rescaleMark) so the next drift
     // sweep continues shrinking from this new size instead of jumping back
     // to the size the mark was placed at.
     const commitScale = useCallback(async (axisIndex, computeNext) => {
-        if (!pendingEntity || busy) return
+        if (!pendingEntity || busy || !canEditEntity(pendingEntity)) return
         setBusy(true)
         try {
             const current = pendingEntity.components.transform?.scale || [1, 1, 1]
@@ -577,14 +699,14 @@ export default function FiniteForeverExperience() {
         } finally {
             setBusy(false)
         }
-    }, [pendingEntity, version, busy, handleOpError, pushUndo])
+    }, [pendingEntity, version, busy, canEditEntity, handleOpError, pushUndo])
 
     const handleScaleNudge = useCallback((axisIndex, delta) => (
         commitScale(axisIndex, (current) => current + delta)
     ), [commitScale])
 
     const handleScaleDragChange = useCallback((axisIndex, value) => {
-        if (!pendingEntity) return
+        if (!pendingEntity || !canEditEntity(pendingEntity)) return
         let chain = scaleChainRef.current
         if (!chain || chain.entityId !== pendingEntity.id) {
             const startScale = [...(pendingEntity.components.transform?.scale || [1, 1, 1])]
@@ -625,12 +747,12 @@ export default function FiniteForeverExperience() {
                 pushUndo({ kind: 'scale', entityId: chain.entityId, before: chain.before, after: chain.scale })
             }
         })()
-    }, [pendingEntity, version, handleOpError, pushUndo])
+    }, [pendingEntity, version, canEditEntity, handleOpError, pushUndo])
 
     // Rotation — same shape as position (no re-baselining needed; drift
     // never touches rotation).
     const commitRotation = useCallback(async (axisIndex, computeNext) => {
-        if (!pendingEntity || busy) return
+        if (!pendingEntity || busy || !canEditEntity(pendingEntity)) return
         setBusy(true)
         try {
             const current = pendingEntity.components.transform?.rotation || [0, 0, 0]
@@ -645,14 +767,14 @@ export default function FiniteForeverExperience() {
         } finally {
             setBusy(false)
         }
-    }, [pendingEntity, version, busy, handleOpError, pushUndo])
+    }, [pendingEntity, version, busy, canEditEntity, handleOpError, pushUndo])
 
     const handleRotationNudge = useCallback((axisIndex, delta) => (
         commitRotation(axisIndex, (current) => current + delta)
     ), [commitRotation])
 
     const handleRotationDragChange = useCallback((axisIndex, value) => {
-        if (!pendingEntity) return
+        if (!pendingEntity || !canEditEntity(pendingEntity)) return
         let chain = rotationChainRef.current
         if (!chain || chain.entityId !== pendingEntity.id) {
             const startRotation = [...(pendingEntity.components.transform?.rotation || [0, 0, 0])]
@@ -693,13 +815,13 @@ export default function FiniteForeverExperience() {
                 pushUndo({ kind: 'rotation', entityId: chain.entityId, before: chain.before, after: chain.rotation })
             }
         })()
-    }, [pendingEntity, version, handleOpError, pushUndo])
+    }, [pendingEntity, version, canEditEntity, handleOpError, pushUndo])
 
     // Opacity — a range slider fires onChange continuously while dragging,
     // same race risk as the axis scrubbers, same ref-chain fix. Also
     // re-baselines baseAppearance.opacity for the same reason rescaleMark does.
     const handleOpacityChange = useCallback((value) => {
-        if (!pendingEntity) return
+        if (!pendingEntity || !canEditEntity(pendingEntity)) return
         let chain = opacityChainRef.current
         if (!chain || chain.entityId !== pendingEntity.id) {
             const startOpacity = typeof pendingEntity.components.appearance?.opacity === 'number' ? pendingEntity.components.appearance.opacity : 1
@@ -732,15 +854,16 @@ export default function FiniteForeverExperience() {
                 pushUndo({ kind: 'opacity', entityId: chain.entityId, before: chain.before, after: chain.latestApplied })
             }
         })()
-    }, [pendingEntity, version, handleOpError, pushUndo])
+    }, [pendingEntity, version, canEditEntity, handleOpError, pushUndo])
 
     // Text — deliberately doesn't touch the shared `busy` flag (see
     // TextControl.jsx): disabling the input mid-keystroke would stop you
     // typing. textOverride shows what you just typed instantly, ahead of
     // the network round-trip that's the only way the doc-derived entity
     // would otherwise reflect it. Not undoable (see undo/redo scope note).
+    // Ownership is still enforced (canEditEntity), just not via the busy flag.
     const handleTextChange = useCallback((value) => {
-        if (!pendingEntity) return
+        if (!pendingEntity || !canEditEntity(pendingEntity)) return
         setTextOverride({ entityId: pendingEntity.id, value })
         let chain = textChainRef.current
         if (!chain || chain.entityId !== pendingEntity.id) {
@@ -767,7 +890,7 @@ export default function FiniteForeverExperience() {
             }
             chain.running = false
         })()
-    }, [pendingEntity, version, handleOpError])
+    }, [pendingEntity, version, canEditEntity, handleOpError])
 
     const handleDuplicate = useCallback(async () => {
         if (!pendingEntity || busy) return
@@ -785,7 +908,7 @@ export default function FiniteForeverExperience() {
     }, [pendingEntity, version, busy, actorLabel, actorVisible, handleOpError])
 
     const handleDelete = useCallback(async () => {
-        if (!doc || !pendingEntity || busy) return
+        if (!doc || !pendingEntity || busy || !canEditEntity(pendingEntity)) return
         const entitySnapshot = pendingEntity
         // Deleting a permanent mark frees a permanence-pool slot as a side
         // effect (see deleteMark); undo re-creating the entity via a plain
@@ -810,7 +933,7 @@ export default function FiniteForeverExperience() {
         } finally {
             setBusy(false)
         }
-    }, [doc, pendingEntity, version, busy, actorLabel, actorVisible, handleOpError, pushUndo])
+    }, [doc, pendingEntity, version, busy, actorLabel, actorVisible, canEditEntity, handleOpError, pushUndo])
 
     // Admin mode's box-select, bulk version of handleDelete above — one
     // batched request instead of one per mark (see deleteMarks). Each
@@ -838,6 +961,32 @@ export default function FiniteForeverExperience() {
             setBusy(false)
         }
     }, [doc, version, busy, marqueeSelectedEntities, actorLabel, actorVisible, handleOpError, pushUndo])
+
+    // Admin mode's other box-select bulk action: make the whole selection
+    // permanent in one request, uncapped by the shared pool (see
+    // claimMarksForever) — not the normal capped claim flow every other
+    // participant uses, and not undoable, same reasoning as a single claim.
+    const handleBulkClaim = useCallback(async () => {
+        if (!doc || busy || marqueeSelectedEntities.length === 0) return
+        setBusy(true)
+        try {
+            const response = await claimMarksForever({
+                document: doc,
+                baseVersion: version,
+                entities: marqueeSelectedEntities,
+                actorLabel,
+                actorVisible
+            })
+            setDoc(response.document)
+            setVersion(response.newVersion)
+            setMarqueeSelectedIds([])
+            setError(null)
+        } catch (err) {
+            handleOpError(err, 'Could not make the selected marks permanent.')
+        } finally {
+            setBusy(false)
+        }
+    }, [doc, version, busy, marqueeSelectedEntities, actorLabel, actorVisible, handleOpError])
 
     // Copy just remembers the reusable look-and-feel fields, device-locally
     // — not the placement/permanence state, same reasoning as duplicateMark.
@@ -874,7 +1023,7 @@ export default function FiniteForeverExperience() {
             setDoc(response.document)
             setVersion(response.newVersion)
             await appendRitualLogEntry({ actorLabel, actorVisible, action: 'place', targetLabel: entity.name, detail: { entityId: entity.id } })
-            setSelectedEntityId(entity.id)
+            if (!isTouch) setSelectedEntityId(entity.id)
             pushUndo({ kind: 'place', entityId: entity.id, entitySnapshot: entity })
             setError(null)
         } catch (err) {
@@ -882,7 +1031,7 @@ export default function FiniteForeverExperience() {
         } finally {
             setBusy(false)
         }
-    }, [doc, version, busy, actorLabel, actorVisible, handleOpError, getSpawnPosition, pushUndo])
+    }, [doc, version, busy, actorLabel, actorVisible, isTouch, handleOpError, getSpawnPosition, pushUndo])
 
     // Keyboard shortcuts — skipped entirely while typing in any field (name/
     // text/color/etc.), same guard Backspace already used, now shared by
@@ -942,20 +1091,6 @@ export default function FiniteForeverExperience() {
         return () => window.removeEventListener('keydown', handleKeyDown)
     }, [pendingEntity, selectedEntityId, advancedEntityId, adminWorkspaceOpen, isAdmin, marqueeSelectedIds, handleDelete, handleBulkDelete, handleUndo, handleRedo, handleCopy, handlePaste, handleDuplicate])
 
-    const handleAdvanceDrift = useCallback(async () => {
-        if (busy) return
-        setBusy(true)
-        try {
-            await advanceDrift()
-            await reload()
-            setError(null)
-        } catch (err) {
-            handleOpError(err, 'Could not advance drift.')
-        } finally {
-            setBusy(false)
-        }
-    }, [busy, reload, handleOpError])
-
     const pool = doc ? readPermanencePool(doc) : { total: 0, claimed: 0 }
 
     if (!identity) {
@@ -975,7 +1110,10 @@ export default function FiniteForeverExperience() {
                     enablePointerLock={false}
                     marqueeSelectEnabled={isAdmin && adminWorkspaceOpen}
                     onMarqueeSelect={setMarqueeSelectedIds}
-                    selectedEntityIds={marqueeSelectedIds}
+                    selectedEntityIds={selectedEntityIds}
+                    draggableEntityId={pendingEntity && canEditEntity(pendingEntity) ? pendingEntity.id : null}
+                    onEntityDragStart={handleViewportDragStart}
+                    onEntityDragEnd={handleViewportDragEnd}
                 />
             </Suspense>
 
@@ -993,7 +1131,6 @@ export default function FiniteForeverExperience() {
                     <button type="button" className="ff-button ff-button--ghost" onClick={() => setLogOpen(true)}>
                         The ritual log
                     </button>
-                    <AdvanceDriftControl visible={isAdmin} onAdvance={handleAdvanceDrift} busy={busy} />
                 </div>
             </div>
 
@@ -1015,6 +1152,8 @@ export default function FiniteForeverExperience() {
                 <ClaimPrompt
                     entity={displayEntity}
                     pool={pool}
+                    permanentMarks={permanentMarks}
+                    actorLabel={actorLabel}
                     busy={busy}
                     onConfirm={handleConfirmClaim}
                     onDismiss={handleDismissClaim}
@@ -1023,6 +1162,7 @@ export default function FiniteForeverExperience() {
                     onDelete={handleDelete}
                     onRename={(name) => handleRename(pendingEntity, name)}
                     onNudge={handleNudge}
+                    onGround={handleGround}
                     onAxisDragChange={handleAxisDragChange}
                     onScaleNudge={handleScaleNudge}
                     onScaleDragChange={handleScaleDragChange}
@@ -1049,7 +1189,11 @@ export default function FiniteForeverExperience() {
             )}
 
             {isAdmin && adminWorkspaceOpen && (
-                <AdminModeOverlay selectedEntities={marqueeSelectedEntities} />
+                <AdminModeOverlay
+                    selectedEntities={marqueeSelectedEntities}
+                    onMakePermanent={handleBulkClaim}
+                    busy={busy}
+                />
             )}
 
             {error && <p className="ff-error" role="alert">{error}</p>}
