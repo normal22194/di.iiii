@@ -166,3 +166,31 @@ describe('ClaimPrompt — pool-full revoke choice', () => {
         expect(onConfirm).not.toHaveBeenCalled()
     })
 })
+
+describe('ClaimPrompt — permanent vs left status display', () => {
+    it('a permanent mark shows "Kept forever", no claim button, and a Close button (not "Let it drift")', () => {
+        render(<ClaimPrompt {...baseProps} entity={makeEntity({ status: 'permanent', claimedBy: 'aya', claimedByVisible: true })} />)
+        expect(screen.getByText('Kept forever')).toBeInTheDocument()
+        expect(screen.getByText("aya chose to keep this. It won't drift.")).toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: /Keep this forever/ })).not.toBeInTheDocument()
+        // Two "Close" buttons exist here: DraggablePanel's own header close
+        // icon, and this panel's own footer action button (which reads
+        // "Close" instead of "Let it drift" once permanent/left).
+        expect(screen.getAllByRole('button', { name: 'Close' })).toHaveLength(2)
+        expect(screen.queryByRole('button', { name: 'Let it drift' })).not.toBeInTheDocument()
+    })
+
+    it('a left mark (admin\'s "Leave") shows its own distinct message, not "Kept forever", and no claim button either', () => {
+        render(<ClaimPrompt {...baseProps} entity={makeEntity({ status: 'left', claimedBy: 'admin', claimedByVisible: true })} />)
+        expect(screen.getByText('Left here')).toBeInTheDocument()
+        expect(screen.getByText("admin left this here. It won't drift, but it doesn't count against permanence.")).toBeInTheDocument()
+        expect(screen.queryByText('Kept forever')).not.toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: /Keep this forever/ })).not.toBeInTheDocument()
+        expect(screen.getAllByRole('button', { name: 'Close' })).toHaveLength(2)
+    })
+
+    it('a left mark shows no drift countdown, unlike a genuinely drifting mark', () => {
+        render(<ClaimPrompt {...baseProps} entity={makeEntity({ status: 'left', claimedBy: 'admin' })} />)
+        expect(screen.queryByText(/until this fades away for good/)).not.toBeInTheDocument()
+    })
+})

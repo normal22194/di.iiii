@@ -71,6 +71,18 @@ const TYPE_LABEL = { box: 'Box', sphere: 'Sphere', cone: 'Cone', torus: 'Ring', 
 export const PAGEABLE_TYPES = ['box']
 export const PAGE_COUNT = 6
 
+// Sphere/cone/torus render as one continuous UV-wrapped surface (unlike
+// box's 6 discrete material groups — see BoxObject.jsx), so instead of
+// per-face Pages they get exactly one drawable/uploadable texture, stored
+// in the same `appearance.textureAssetId` field LiveProjectScene.jsx
+// already resolves into a `material.textureAsset` for every solid
+// primitive (see EntityVisual in components/LiveProjectScene.jsx) — no
+// renderer change needed, this only adds the client-side draw/upload UI
+// and ops for it. text/image/model/box are deliberately excluded: box
+// already has Pages, image/model already show uploaded content, and
+// Text3DObject has no texture-map input at all.
+export const TEXTURABLE_SHAPE_TYPES = ['sphere', 'cone', 'torus']
+
 export function buildPagesComponent() {
     return {
         items: Array.from({ length: PAGE_COUNT }, () => ({ assetId: null }))
@@ -255,6 +267,17 @@ export async function rescaleMark({ baseVersion, entityId, scale }) {
     ])
 }
 
+// Shape-specific geometry (sphere/cone/torus's radius/height/tube) — lives
+// in the shared schema's `primitive` component (see
+// buildDefaultComponentsForType in projectSchema.js, which every mark
+// already gets defaults for on creation even though buildMarkEntity below
+// doesn't set them explicitly). Only edited from Advanced (ShapeControls.jsx).
+export async function setMarkGeometry({ baseVersion, entityId, patch }) {
+    return submitProjectOps(FINITE_FOREVER_PROJECT_ID, baseVersion, [
+        { type: 'updateComponent', payload: { entityId, component: 'primitive', patch } }
+    ])
+}
+
 // Same re-baselining reasoning as rescaleMark, for opacity.
 export async function setMarkOpacity({ baseVersion, entityId, opacity }) {
     return submitProjectOps(FINITE_FOREVER_PROJECT_ID, baseVersion, [
@@ -266,6 +289,14 @@ export async function setMarkOpacity({ baseVersion, entityId, opacity }) {
 export async function setMarkText({ baseVersion, entityId, value }) {
     return submitProjectOps(FINITE_FOREVER_PROJECT_ID, baseVersion, [
         { type: 'updateComponent', payload: { entityId, component: 'text', patch: { value } } }
+    ])
+}
+
+// Font/size/depth/bevel — the rest of the `text` component besides its
+// value (see setMarkText). Also Advanced-only, edited via ShapeControls.jsx.
+export async function setMarkTextStyle({ baseVersion, entityId, patch }) {
+    return submitProjectOps(FINITE_FOREVER_PROJECT_ID, baseVersion, [
+        { type: 'updateComponent', payload: { entityId, component: 'text', patch } }
     ])
 }
 
@@ -291,11 +322,23 @@ export const uploadPageAsset = (blob, filename) => (
 // moment this lands. Registers the asset and replaces the whole `items`
 // array (updateComponent patches replace array values wholesale, they
 // don't merge by index), leaving every other page's slot untouched.
+//
+// Also resets appearance.color to white. BoxObject's per-face materials
+// (see its `color: asColor(color)`) tint whatever map is set — same as
+// PrimitiveMaterial's own documented behavior ("pick white to show the
+// image unmodified") — so a mark still at its default non-white spawn tint
+// (`#9fd8ff`) made a freshly-drawn/uploaded page look faded/blue-washed
+// instead of true-color. Forcing white here does that automatically rather
+// than requiring the artist to notice and recolor manually first. Applies
+// to all 6 faces at once (color is one field for the whole mark, not
+// per-face) — an accepted side effect: drawing on any one face resets the
+// whole box's base tint too, not just that face.
 export async function savePage({ baseVersion, entityId, pageIndex, items, asset }) {
     const nextItems = items.map((item, i) => (i === pageIndex ? { assetId: asset.id } : item))
     return submitProjectOps(FINITE_FOREVER_PROJECT_ID, baseVersion, [
         { type: 'upsertAsset', payload: { asset } },
-        { type: 'updateComponent', payload: { entityId, component: 'pages', patch: { items: nextItems } } }
+        { type: 'updateComponent', payload: { entityId, component: 'pages', patch: { items: nextItems } } },
+        { type: 'updateComponent', payload: { entityId, component: 'appearance', patch: { color: '#ffffff' } } }
     ])
 }
 
@@ -308,6 +351,28 @@ export async function clearPage({ baseVersion, entityId, pageIndex, items }) {
     const nextItems = items.map((item, i) => (i === pageIndex ? { assetId: null } : item))
     return submitProjectOps(FINITE_FOREVER_PROJECT_ID, baseVersion, [
         { type: 'updateComponent', payload: { entityId, component: 'pages', patch: { items: nextItems } } }
+    ])
+}
+
+// The single-surface equivalent of savePage/clearPage, for sphere/cone/
+// torus (see TEXTURABLE_SHAPE_TYPES) — same upsertAsset-then-patch shape,
+// just writing the one `appearance.textureAssetId` field instead of an
+// indexed `pages.items` array. Also forces color to white in the same
+// patch — same fading fix and reasoning as savePage above (PrimitiveMaterial
+// tints `map` by `color`), just as one combined `appearance` patch here
+// since both fields live in that same component.
+export async function saveShapeTexture({ baseVersion, entityId, asset }) {
+    return submitProjectOps(FINITE_FOREVER_PROJECT_ID, baseVersion, [
+        { type: 'upsertAsset', payload: { asset } },
+        { type: 'updateComponent', payload: { entityId, component: 'appearance', patch: { textureAssetId: asset.id, color: '#ffffff' } } }
+    ])
+}
+
+// Reverts to the plain flat color — same reasoning as clearPage: null skips
+// having a texture at all, rather than uploading a blank/transparent image.
+export async function clearShapeTexture({ baseVersion, entityId }) {
+    return submitProjectOps(FINITE_FOREVER_PROJECT_ID, baseVersion, [
+        { type: 'updateComponent', payload: { entityId, component: 'appearance', patch: { textureAssetId: null } } }
     ])
 }
 
@@ -460,6 +525,57 @@ export async function claimMarksForever({ document, baseVersion, entities, actor
         actorLabel,
         actorVisible,
         action: 'claim',
+        targetLabel: `${targets.length} mark${targets.length === 1 ? '' : 's'}`,
+        detail: { count: targets.length, bulk: true }
+    })
+
+    return result
+}
+
+// Admin-only "Leave" — the other bulk box-select action, distinct from
+// claimMarksForever above. A mark left this way never drifts, same as a
+// permanent one, but is deliberately a *different* status ('left', not
+// 'permanent') and never touches permanencePool at all: it doesn't occupy
+// one of the shared pool's limited slots and never shows up in
+// listPermanentMarks/planClaim's revoke-candidate list. This is the fix for
+// claimMarksForever silently inflating the "kept forever" count while
+// claiming to have no cap — "left" marks are honestly outside that count
+// altogether instead of pretending to be uncapped permanent ones.
+// Converting an already-*permanent* mark to "left" frees its pool slot (same
+// bookkeeping deleteMark/deleteMarks already do when a permanent mark goes
+// away), since it's leaving the counted category. Marks already 'left' are
+// skipped (nothing to do); an all-already-left selection is a no-op.
+export async function leaveMarksForever({ document, baseVersion, entities, actorLabel, actorVisible = true }) {
+    const targets = (entities || []).filter((entity) => entity?.components?.permanence?.status !== 'left')
+    if (targets.length === 0) {
+        return { document, newVersion: baseVersion }
+    }
+
+    const now = Date.now()
+    const ops = targets.map((entity) => ({
+        type: 'updateComponent',
+        payload: {
+            entityId: entity.id,
+            component: 'permanence',
+            patch: { status: 'left', claimedBy: actorLabel || 'someone', claimedByVisible: actorVisible, claimedAt: now }
+        }
+    }))
+
+    const permanentBeingLeft = targets.filter((entity) => entity.components.permanence.status === 'permanent').length
+    if (permanentBeingLeft > 0) {
+        const pool = readPermanencePool(document)
+        ops.push({
+            type: 'setWorkspaceState',
+            payload: { patch: { permanencePool: { total: pool.total, claimed: Math.max(0, pool.claimed - permanentBeingLeft) } } }
+        })
+    }
+
+    const result = await submitProjectOps(FINITE_FOREVER_PROJECT_ID, baseVersion, ops)
+
+    await appendRitualLogEntry({
+        actorLabel,
+        actorVisible,
+        action: 'leave',
         targetLabel: `${targets.length} mark${targets.length === 1 ? '' : 's'}`,
         detail: { count: targets.length, bulk: true }
     })

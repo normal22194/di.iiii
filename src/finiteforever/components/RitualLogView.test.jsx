@@ -23,6 +23,12 @@ describe('RitualLogView', () => {
         expect(await screen.findByText('nooo placed Box mark')).toBeInTheDocument()
     })
 
+    it('describes a "leave" entry distinctly from "claim" — it is not counted as kept forever', async () => {
+        fetchRitualLog.mockResolvedValue([{ id: '1', action: 'leave', actorLabel: 'admin', targetLabel: '3 marks', createdAt: 1 }])
+        render(<RitualLogView open onClose={vi.fn()} />)
+        expect(await screen.findByText("admin left 3 marks here — it won't drift, but it isn't counted as kept forever")).toBeInTheDocument()
+    })
+
     it('clicking outside the panel closes it', async () => {
         fetchRitualLog.mockResolvedValue([])
         const onClose = vi.fn()

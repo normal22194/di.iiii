@@ -7,6 +7,7 @@ import AdvancedSettingsPanel from './components/AdvancedSettingsPanel.jsx'
 import AdminModeOverlay from './components/AdminModeOverlay.jsx'
 import PoolHud from './components/PoolHud.jsx'
 import RitualLogView from './components/RitualLogView.jsx'
+import ConceptView from './components/ConceptView.jsx'
 import EntryGate from './components/EntryGate.jsx'
 import { clearIdentity, readStoredIdentity, storeIdentity } from './identity.js'
 import { prepareObjImport, prepareStlImport } from './modelImportProcessing.js'
@@ -16,6 +17,7 @@ import {
     buildMarkEntity,
     claimMarksForever,
     claimPermanence,
+    leaveMarksForever,
     clearPage,
     deleteMark,
     deleteMarks,
@@ -31,8 +33,12 @@ import {
     rescaleMark,
     rotateMark,
     savePage,
+    saveShapeTexture,
+    clearShapeTexture,
+    setMarkGeometry,
     setMarkOpacity,
     setMarkText,
+    setMarkTextStyle,
     uploadMarkAsset,
     uploadPageAsset,
     appendRitualLogEntry
@@ -166,6 +172,7 @@ export default function FiniteForeverExperience() {
     const [busy, setBusy] = useState(false)
     const [error, setError] = useState(null)
     const [logOpen, setLogOpen] = useState(false)
+    const [conceptOpen, setConceptOpen] = useState(false)
     const [importOpen, setImportOpen] = useState(false)
     const [importError, setImportError] = useState(null)
     // First-arrival framing: states the concept once, then gets out of the
@@ -191,6 +198,8 @@ export default function FiniteForeverExperience() {
     const rotationChainRef = useRef(null)
     const opacityChainRef = useRef(null)
     const textChainRef = useRef(null)
+    const geometryChainRef = useRef(null)
+    const textSizeChainRef = useRef(null)
     // Device-local "what you last copied" — not shared/synced, same as a
     // real clipboard. Holds just the reusable look-and-feel fields, not
     // placement/permanence state (same reasoning as duplicateMark).
@@ -236,6 +245,8 @@ export default function FiniteForeverExperience() {
             rotationChainRef.current = null
             opacityChainRef.current = null
             textChainRef.current = null
+            geometryChainRef.current = null
+            textSizeChainRef.current = null
             viewportDragBeforeRef.current = null
             // Otherwise the text field would keep showing what you'd typed
             // locally instead of the just-resynced server value.
@@ -546,6 +557,190 @@ export default function FiniteForeverExperience() {
             setBusy(false)
         }
     }, [advancedEntity, version, busy, handleOpError])
+
+    // Single-surface equivalent of handleSavePage/handleClearPage, for
+    // sphere/cone/torus (see TEXTURABLE_SHAPE_TYPES) — also Advanced-only,
+    // targets advancedEntity. Unlike Pages, gated with canEditEntity in the
+    // handler itself (not just disabled in the UI), matching the ownership
+    // lock already applied to every other Advanced/main-window edit.
+    const handleSaveShapeTexture = useCallback(async (blob) => {
+        if (!advancedEntity || busy || !canEditEntity(advancedEntity)) return
+        setBusy(true)
+        try {
+            const asset = await uploadPageAsset(blob, `surface-${advancedEntity.id}.png`)
+            const response = await saveShapeTexture({ baseVersion: version, entityId: advancedEntity.id, asset })
+            setDoc(response.document)
+            setVersion(response.newVersion)
+            setError(null)
+        } catch (err) {
+            handleOpError(err, 'Could not save that texture.')
+        } finally {
+            setBusy(false)
+        }
+    }, [advancedEntity, version, busy, canEditEntity, handleOpError])
+
+    const handleClearShapeTexture = useCallback(async () => {
+        if (!advancedEntity || busy || !canEditEntity(advancedEntity)) return
+        setBusy(true)
+        try {
+            const response = await clearShapeTexture({ baseVersion: version, entityId: advancedEntity.id })
+            setDoc(response.document)
+            setVersion(response.newVersion)
+            setError(null)
+        } catch (err) {
+            handleOpError(err, 'Could not clear that texture.')
+        } finally {
+            setBusy(false)
+        }
+    }, [advancedEntity, version, busy, canEditEntity, handleOpError])
+
+    // Shape geometry (sphere/cone/torus's primitive.radius/height/tube) —
+    // Advanced-only, and Advanced may be showing a mark other than
+    // pendingEntity (same reasoning as handleSavePage/handleClearPage just
+    // above), so the entity is always passed in rather than closed over.
+    // Mirrors commitScale/handleScaleDragChange's chain-coalescing shape,
+    // generalized over an arbitrary ordered list of field names instead of a
+    // fixed 3-axis scale array, since sphere/cone/torus each expose a
+    // different subset (see ShapeControls.jsx's GEOMETRY_FIELDS).
+    const commitGeometry = useCallback(async (entity, fields, values) => {
+        if (!entity || busy || !canEditEntity(entity)) return
+        setBusy(true)
+        try {
+            const patch = Object.fromEntries(fields.map((key, i) => [key, values[i]]))
+            const response = await setMarkGeometry({ baseVersion: version, entityId: entity.id, patch })
+            setDoc(response.document)
+            setVersion(response.newVersion)
+            setError(null)
+        } catch (err) {
+            handleOpError(err, 'Could not resize that shape.')
+        } finally {
+            setBusy(false)
+        }
+    }, [busy, version, canEditEntity, handleOpError])
+
+    const handleGeometryNudge = useCallback((entity, fields, axisIndex, delta) => {
+        if (!entity) return
+        const primitive = entity.components.primitive || {}
+        const current = fields.map((key) => Number(primitive[key]) || 0)
+        const next = current.map((v, i) => (i === axisIndex ? Math.max(0.05, v + delta) : v))
+        commitGeometry(entity, fields, next)
+    }, [commitGeometry])
+
+    const handleGeometryDragChange = useCallback((entity, fields, axisIndex, value) => {
+        if (!entity || !canEditEntity(entity)) return
+        let chain = geometryChainRef.current
+        if (!chain || chain.entityId !== entity.id) {
+            const primitive = entity.components.primitive || {}
+            const startValues = fields.map((key) => Number(primitive[key]) || 0)
+            chain = { entityId: entity.id, fields, version, values: startValues, latest: null, running: false }
+            geometryChainRef.current = chain
+        }
+        chain.latest = { axisIndex, value: Math.max(0.05, value) }
+        if (chain.running) return
+        chain.running = true
+        setBusy(true)
+        ;(async () => {
+            while (chain.latest) {
+                const { axisIndex: ai, value: v } = chain.latest
+                chain.latest = null
+                const nextValues = chain.values.map((p, i) => (i === ai ? v : p))
+                try {
+                    const patch = Object.fromEntries(chain.fields.map((key, i) => [key, nextValues[i]]))
+                    const response = await setMarkGeometry({ baseVersion: chain.version, entityId: chain.entityId, patch })
+                    chain.version = response.newVersion
+                    chain.values = nextValues
+                    setDoc(response.document)
+                    setVersion(response.newVersion)
+                    setError(null)
+                } catch (err) {
+                    handleOpError(err, 'Could not resize that shape.')
+                    break
+                }
+            }
+            chain.running = false
+            setBusy(false)
+        })()
+    }, [version, canEditEntity, handleOpError])
+
+    // Text's fontSize3D/depth3D — same chain-coalescing shape as geometry
+    // above, targeting the `text` component (setMarkTextStyle) instead of
+    // `primitive`.
+    const commitTextSize = useCallback(async (entity, fields, values) => {
+        if (!entity || busy || !canEditEntity(entity)) return
+        setBusy(true)
+        try {
+            const patch = Object.fromEntries(fields.map((key, i) => [key, values[i]]))
+            const response = await setMarkTextStyle({ baseVersion: version, entityId: entity.id, patch })
+            setDoc(response.document)
+            setVersion(response.newVersion)
+            setError(null)
+        } catch (err) {
+            handleOpError(err, 'Could not resize that text.')
+        } finally {
+            setBusy(false)
+        }
+    }, [busy, version, canEditEntity, handleOpError])
+
+    const handleTextSizeNudge = useCallback((entity, fields, axisIndex, delta) => {
+        if (!entity) return
+        const text = entity.components.text || {}
+        const current = fields.map((key) => Number(text[key]) || 0)
+        const next = current.map((v, i) => (i === axisIndex ? Math.max(0.05, v + delta) : v))
+        commitTextSize(entity, fields, next)
+    }, [commitTextSize])
+
+    const handleTextSizeDragChange = useCallback((entity, fields, axisIndex, value) => {
+        if (!entity || !canEditEntity(entity)) return
+        let chain = textSizeChainRef.current
+        if (!chain || chain.entityId !== entity.id) {
+            const text = entity.components.text || {}
+            const startValues = fields.map((key) => Number(text[key]) || 0)
+            chain = { entityId: entity.id, fields, version, values: startValues, latest: null, running: false }
+            textSizeChainRef.current = chain
+        }
+        chain.latest = { axisIndex, value: Math.max(0.05, value) }
+        if (chain.running) return
+        chain.running = true
+        setBusy(true)
+        ;(async () => {
+            while (chain.latest) {
+                const { axisIndex: ai, value: v } = chain.latest
+                chain.latest = null
+                const nextValues = chain.values.map((p, i) => (i === ai ? v : p))
+                try {
+                    const patch = Object.fromEntries(chain.fields.map((key, i) => [key, nextValues[i]]))
+                    const response = await setMarkTextStyle({ baseVersion: chain.version, entityId: chain.entityId, patch })
+                    chain.version = response.newVersion
+                    chain.values = nextValues
+                    setDoc(response.document)
+                    setVersion(response.newVersion)
+                    setError(null)
+                } catch (err) {
+                    handleOpError(err, 'Could not resize that text.')
+                    break
+                }
+            }
+            chain.running = false
+            setBusy(false)
+        })()
+    }, [version, canEditEntity, handleOpError])
+
+    // Font family / bevel toggle — direct commit, no drag chain needed (a
+    // <select>/checkbox fires once per change, not continuously like a scrub).
+    const handleTextStyleChange = useCallback(async (entity, patch) => {
+        if (!entity || busy || !canEditEntity(entity)) return
+        setBusy(true)
+        try {
+            const response = await setMarkTextStyle({ baseVersion: version, entityId: entity.id, patch })
+            setDoc(response.document)
+            setVersion(response.newVersion)
+            setError(null)
+        } catch (err) {
+            handleOpError(err, 'Could not change that text style.')
+        } finally {
+            setBusy(false)
+        }
+    }, [busy, version, canEditEntity, handleOpError])
 
     // Shared by the step buttons (relative delta) and the drag-to-scrub value
     // (absolute value) — both just need "here's axis i's new number". Each
@@ -916,15 +1111,20 @@ export default function FiniteForeverExperience() {
         // claimed count out of sync with what's actually still marked
         // permanent. Simplest correct fix: undo isn't offered for these —
         // letting go of something you claimed forever isn't meant to be a
-        // casual, undo-able action anyway.
-        const wasPermanent = entitySnapshot.components?.permanence?.status === 'permanent'
+        // casual, undo-able action anyway. Same reasoning extends to 'left'
+        // marks (see leaveMarksForever) even though they don't touch the
+        // pool: undo would still re-create them via a plain placeMark, which
+        // starts a fresh *drifting* mark — silently losing the "never
+        // drifts" guarantee an admin deliberately gave it.
+        const status = entitySnapshot.components?.permanence?.status
+        const undoExempt = status === 'permanent' || status === 'left'
         setBusy(true)
         try {
             const response = await deleteMark({ document: doc, baseVersion: version, entity: pendingEntity, actorLabel, actorVisible })
             setDoc(response.document)
             setVersion(response.newVersion)
             setSelectedEntityId(null)
-            if (!wasPermanent) {
+            if (!undoExempt) {
                 pushUndo({ kind: 'delete', entityId: entitySnapshot.id, entitySnapshot })
             }
             setError(null)
@@ -937,10 +1137,10 @@ export default function FiniteForeverExperience() {
 
     // Admin mode's box-select, bulk version of handleDelete above — one
     // batched request instead of one per mark (see deleteMarks). Each
-    // non-permanent deletion still gets its own undo entry, so Ctrl+Z steps
+    // undo-eligible deletion still gets its own undo entry, so Ctrl+Z steps
     // back through them one at a time rather than restoring the whole
-    // group at once; permanent marks are excluded from undo for the same
-    // pool-slot reason a single delete excludes them.
+    // group at once; permanent *and* left marks are excluded from undo for
+    // the same reasons a single delete excludes them (see handleDelete).
     const handleBulkDelete = useCallback(async () => {
         if (!doc || busy || marqueeSelectedEntities.length === 0) return
         setBusy(true)
@@ -949,7 +1149,8 @@ export default function FiniteForeverExperience() {
             setDoc(response.document)
             setVersion(response.newVersion)
             for (const entity of marqueeSelectedEntities) {
-                if (entity.components?.permanence?.status !== 'permanent') {
+                const status = entity.components?.permanence?.status
+                if (status !== 'permanent' && status !== 'left') {
                     pushUndo({ kind: 'delete', entityId: entity.id, entitySnapshot: entity })
                 }
             }
@@ -983,6 +1184,35 @@ export default function FiniteForeverExperience() {
             setError(null)
         } catch (err) {
             handleOpError(err, 'Could not make the selected marks permanent.')
+        } finally {
+            setBusy(false)
+        }
+    }, [doc, version, busy, marqueeSelectedEntities, actorLabel, actorVisible, handleOpError])
+
+    // Admin mode's third box-select bulk action: leave the whole selection in
+    // place without ever drifting, but — unlike handleBulkClaim above —
+    // without touching the shared permanence pool at all (see
+    // leaveMarksForever). This is the fix for the pool being silently
+    // inflated by "Make all permanent": pieces an admin just wants to leave
+    // alone don't pretend to be one of the community's limited "kept
+    // forever" slots.
+    const handleBulkLeave = useCallback(async () => {
+        if (!doc || busy || marqueeSelectedEntities.length === 0) return
+        setBusy(true)
+        try {
+            const response = await leaveMarksForever({
+                document: doc,
+                baseVersion: version,
+                entities: marqueeSelectedEntities,
+                actorLabel,
+                actorVisible
+            })
+            setDoc(response.document)
+            setVersion(response.newVersion)
+            setMarqueeSelectedIds([])
+            setError(null)
+        } catch (err) {
+            handleOpError(err, 'Could not leave the selected marks.')
         } finally {
             setBusy(false)
         }
@@ -1128,6 +1358,9 @@ export default function FiniteForeverExperience() {
                     </div>
                 </div>
                 <div className="ff-overlay__actions">
+                    <button type="button" className="ff-button ff-button--ghost" onClick={() => setConceptOpen(true)}>
+                        The concept
+                    </button>
                     <button type="button" className="ff-button ff-button--ghost" onClick={() => setLogOpen(true)}>
                         The ritual log
                     </button>
@@ -1185,6 +1418,13 @@ export default function FiniteForeverExperience() {
                     onRename={(name) => handleRename(advancedEntity, name)}
                     onSavePage={handleSavePage}
                     onClearPage={handleClearPage}
+                    onGeometryNudge={(fields, axisIndex, delta) => handleGeometryNudge(advancedEntity, fields, axisIndex, delta)}
+                    onGeometryDragChange={(fields, axisIndex, value) => handleGeometryDragChange(advancedEntity, fields, axisIndex, value)}
+                    onTextSizeNudge={(fields, axisIndex, delta) => handleTextSizeNudge(advancedEntity, fields, axisIndex, delta)}
+                    onTextSizeDragChange={(fields, axisIndex, value) => handleTextSizeDragChange(advancedEntity, fields, axisIndex, value)}
+                    onTextStyleChange={(patch) => handleTextStyleChange(advancedEntity, patch)}
+                    onSaveShapeTexture={handleSaveShapeTexture}
+                    onClearShapeTexture={handleClearShapeTexture}
                 />
             )}
 
@@ -1192,6 +1432,7 @@ export default function FiniteForeverExperience() {
                 <AdminModeOverlay
                     selectedEntities={marqueeSelectedEntities}
                     onMakePermanent={handleBulkClaim}
+                    onLeave={handleBulkLeave}
                     busy={busy}
                 />
             )}
@@ -1209,6 +1450,7 @@ export default function FiniteForeverExperience() {
             )}
 
             <RitualLogView open={logOpen} onClose={() => setLogOpen(false)} />
+            <ConceptView open={conceptOpen} onClose={() => setConceptOpen(false)} />
         </div>
     )
 }

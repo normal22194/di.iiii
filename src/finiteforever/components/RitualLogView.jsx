@@ -4,6 +4,7 @@ import { fetchRitualLog } from '../permanence.js'
 const ACTION_COPY = {
     place: (e) => `${e.actorLabel || 'someone'} placed ${e.targetLabel}`,
     claim: (e) => `${e.actorLabel || 'someone'} chose to keep ${e.targetLabel} forever`,
+    leave: (e) => `${e.actorLabel || 'someone'} left ${e.targetLabel} here — it won't drift, but it isn't counted as kept forever`,
     revoke: (e) => `${e.actorLabel || 'someone'} chose to let go of ${e.targetLabel} in order to keep ${e.detail?.takenBy || 'their own mark'} forever`,
     release: (e) => `${e.actorLabel || 'someone'} let go of ${e.targetLabel} — its permanence returned to the pool`,
     delete: (e) => `${e.actorLabel || 'someone'} deleted ${e.targetLabel}`,

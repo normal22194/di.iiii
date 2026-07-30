@@ -2,7 +2,7 @@
 // deliberately NOT inside the shared model renderer (src/objectComponents/
 // ModelObject.jsx, used by Studio/Beta too), so this can't change how an
 // already-placed model anywhere else in the app looks or performs the next
-// time it loads. Two problems this solves, both specific to STL/OBJ:
+// time it loads. Problems this solves, specific to STL/OBJ:
 //
 // 1. Neither format carries any unit convention of its own (unlike GLTF/GLB,
 //    which near-universally follow a meters convention) — a CAD export can
@@ -13,11 +13,18 @@
 // 2. Neither format caps triangle count the way most GLTF export pipelines
 //    already do — a shared real-time space with many simultaneous marks
 //    can't afford one import carrying an arbitrary CAD-grade mesh.
+// 3. STL in particular stores exactly one flat normal per facet, with every
+//    triangle's 3 vertices stored independently (no shared/indexed
+//    vertices) — even a perfectly reasonable, undecimated STL renders
+//    hard-edged/faceted, not because of any triangle-count issue but
+//    because the format itself can't represent smooth per-vertex shading.
+//    See weldAndSmooth below and prepareStlImport's conversion to OBJ,
+//    which can.
 import * as THREE from 'three'
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js'
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js'
-import { STLExporter } from 'three/examples/jsm/exporters/STLExporter.js'
 import { OBJExporter } from 'three/examples/jsm/exporters/OBJExporter.js'
+import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 
 // Matches the built-in primitives' own default footprint (box 1x1x1, sphere
 // diameter 1) closely enough to read as "a mark", not an invisible speck or
@@ -87,9 +94,17 @@ export function fitScaleFor(largestDimension) {
 const CLUSTER_MAX_ITERATIONS = 6
 const CLUSTER_TOLERANCE = 0.3 // accept anywhere from 70% to 130% of the target
 
-function clusterAtResolution(position, cellSize) {
+// Accumulates every vertex landing in a cell (sum + count, 4 numbers per
+// cell) rather than keeping only the first one seen — averaging them into a
+// centroid at the end is what actually makes this look like a simplified
+// version of the surface instead of a blocky/faceted one. The earlier
+// first-vertex-wins version discarded every other vertex's position in a
+// cell outright, so the "representative" point for a region was an
+// arbitrary sample rather than where the surface actually sat on average —
+// visually reads as chunky/jagged, this is what fixed it.
+export function clusterAtResolution(position, cellSize) {
     const cellIndexOf = new Map()
-    const mergedPositions = []
+    const sums = [] // flat [sumX, sumY, sumZ, count] per occupied cell
     const vertexRemap = new Int32Array(position.count)
     for (let i = 0; i < position.count; i++) {
         const x = position.getX(i)
@@ -98,11 +113,23 @@ function clusterAtResolution(position, cellSize) {
         const key = `${Math.round(x / cellSize)}|${Math.round(y / cellSize)}|${Math.round(z / cellSize)}`
         let mergedIndex = cellIndexOf.get(key)
         if (mergedIndex === undefined) {
-            mergedIndex = mergedPositions.length / 3
-            mergedPositions.push(x, y, z)
+            mergedIndex = sums.length / 4
+            sums.push(x, y, z, 1)
             cellIndexOf.set(key, mergedIndex)
+        } else {
+            const base = mergedIndex * 4
+            sums[base] += x
+            sums[base + 1] += y
+            sums[base + 2] += z
+            sums[base + 3] += 1
         }
         vertexRemap[i] = mergedIndex
+    }
+
+    const mergedPositions = []
+    for (let i = 0; i < sums.length; i += 4) {
+        const count = sums[i + 3]
+        mergedPositions.push(sums[i] / count, sums[i + 1] / count, sums[i + 2] / count)
     }
 
     const indices = []
@@ -145,41 +172,88 @@ export function simplifyIfHeavy(geometry, maxTriangles = MAX_TRIANGLES) {
     return { geometry: next, simplified: true }
 }
 
-// Parses an .stl File, simplifying it first if it's over the triangle
-// budget — re-exported as a fresh binary STL only when that actually
-// happens; an already-reasonable file is re-uploaded as-is, with no
-// parse/export round-trip risk for the common case. Returns the file to
-// actually upload plus the uniform scale to seed the new mark's transform
-// with (see fitScaleFor).
+// Welds vertices that sit at (near enough) the same position into one
+// shared, indexed vertex, then recomputes normals from that shared topology
+// — this is what actually produces smooth shading. Merely calling
+// computeVertexNormals() on STL's raw output (as the shared renderer's own
+// STL path already does, see ModelObject.jsx) does *not* achieve this: STL
+// geometry is non-indexed (every triangle's 3 vertices are separate array
+// entries even where they coincide with a neighboring triangle's), so each
+// "vertex" only ever belongs to one triangle and there is nothing to
+// average normals across. Welding first is the missing step.
+//
+// mergeVertices hashes vertices by *all* their attributes together, so the
+// existing flat per-face 'normal' attribute (which differs between two
+// coincident vertices belonging to different faces) is deleted first —
+// otherwise nothing would be considered a duplicate and welding would do
+// nothing at all.
+//
+// Tolerance is scaled off the mesh's own bounding box rather than using
+// mergeVertices' fixed absolute default (1e-4) — the same reasoning as
+// fitScaleFor/TARGET_LARGEST_DIMENSION: an arbitrary CAD-scale STL could be
+// numerically in the thousands or a tiny fraction, so a fixed absolute
+// distance isn't meaningfully "coincident" at every scale.
+export function weldAndSmooth(geometry) {
+    const clone = geometry.clone()
+    clone.deleteAttribute('normal')
+    clone.computeBoundingBox()
+    const size = clone.boundingBox.getSize(new THREE.Vector3())
+    const largestDimension = Math.max(size.x, size.y, size.z) || 1
+    const merged = mergeVertices(clone, largestDimension * 1e-5)
+    merged.computeVertexNormals()
+    return merged
+}
+
+// Parses an .stl File, welds it to smooth-shade it (see weldAndSmooth),
+// then simplifies further if it's still over the triangle budget. Always
+// re-exported — but as **OBJ, not STL**: the STL format itself can only
+// ever store one flat normal per facet (see STLExporter, which recomputes a
+// fresh face normal on export regardless of what's on the geometry), so
+// re-exporting as STL would silently throw away the smoothing just done.
+// OBJ supports real per-vertex `vn` normals and is already a fully
+// supported import format here (OBJExporter writes them, OBJLoader/
+// ModelObject.jsx already read them back correctly). Returns the file to
+// actually upload (renamed .obj) plus the uniform scale to seed the new
+// mark's transform with (see fitScaleFor).
 export async function prepareStlImport(file) {
     const arrayBuffer = await file.arrayBuffer()
-    const geometry = new STLLoader().parse(arrayBuffer)
-    const { geometry: finalGeometry, simplified } = simplifyIfHeavy(geometry)
+    const rawGeometry = new STLLoader().parse(arrayBuffer)
+    const smoothed = weldAndSmooth(rawGeometry)
+    const { geometry: finalGeometry } = simplifyIfHeavy(smoothed)
     const mesh = new THREE.Mesh(finalGeometry)
     const scale = fitScaleFor(largestDimensionOf(mesh))
-    if (!simplified) return { file, scale }
-    const stlData = new STLExporter().parse(mesh, { binary: true })
-    return { file: new File([stlData], file.name, { type: file.type || 'model/stl' }), scale }
+    const objString = new OBJExporter().parse(mesh)
+    const objName = file.name.replace(/\.stl$/i, '.obj')
+    return { file: new File([objString], objName, { type: 'text/plain' }), scale }
 }
 
 // Same idea for .obj — every mesh in the (possibly multi-object) file is
 // checked/simplified independently, since collapsing across unrelated
 // sub-objects would corrupt them; the file is only re-exported if at least
-// one of them actually needed it.
+// one of them actually needed changing. Unlike STL, OBJ *can* carry real
+// per-vertex normals — computeVertexNormals only runs here as a fallback
+// for a source file that simply didn't define any (`vn` lines), not as a
+// smoothing pass on top of normals the file already had.
 export async function prepareObjImport(file) {
     const objText = await file.text()
     const root = new OBJLoader().parse(objText)
     const scale = fitScaleFor(largestDimensionOf(root))
-    let anySimplified = false
+    let anyChanged = false
     root.traverse((child) => {
         if (!child.isMesh || !child.geometry) return
-        const { geometry, simplified } = simplifyIfHeavy(child.geometry)
-        if (simplified) {
-            child.geometry = geometry
-            anySimplified = true
+        let geometry = child.geometry
+        if (!geometry.attributes.normal) {
+            geometry.computeVertexNormals()
+            anyChanged = true
         }
+        const { geometry: simplifiedGeometry, simplified } = simplifyIfHeavy(geometry)
+        if (simplified) {
+            geometry = simplifiedGeometry
+            anyChanged = true
+        }
+        child.geometry = geometry
     })
-    if (!anySimplified) return { file, scale }
+    if (!anyChanged) return { file, scale }
     const objString = new OBJExporter().parse(root)
     return { file: new File([objString], file.name, { type: file.type || 'text/plain' }), scale }
 }

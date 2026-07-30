@@ -7,7 +7,7 @@ import DrawingCanvas from './DrawingCanvas.jsx'
 // spy on them to assert what the component actually asked the canvas to do.
 function makeFakeContext() {
     return {
-        clearRect: vi.fn(),
+        fillRect: vi.fn(),
         beginPath: vi.fn(),
         arc: vi.fn(),
         fill: vi.fn(),
@@ -77,13 +77,15 @@ describe('DrawingCanvas', () => {
         expect(onSave).toHaveBeenCalledWith(expect.any(Blob))
     })
 
-    it('Clear wipes the canvas and calls onClear directly — not onSave, not auto-save', () => {
+    it('Clear fills the canvas white (not just transparent) and calls onClear directly — not onSave, not auto-save', () => {
         const onSave = vi.fn()
         const onClear = vi.fn()
         render(<DrawingCanvas onSave={onSave} onClear={onClear} />)
+        fakeContext.fillRect.mockClear()
         fireEvent.click(screen.getByRole('button', { name: 'Clear' }))
 
-        expect(fakeContext.clearRect).toHaveBeenCalled()
+        expect(fakeContext.fillRect).toHaveBeenCalled()
+        expect(fakeContext.fillStyle).toBe('#ffffff')
         expect(onClear).toHaveBeenCalledTimes(1)
         expect(onSave).not.toHaveBeenCalled()
         // Nothing pending to save after a clear (it already reverted directly).
@@ -111,6 +113,12 @@ describe('DrawingCanvas', () => {
         const input = document.querySelector('input[type="file"]')
         fireEvent.change(input, { target: { files: [file] } })
         expect(fakeContext.drawImage).toHaveBeenCalled()
+    })
+
+    it('fills the canvas white on mount, even with nothing drawn yet — a raw clearRect would leave it transparent, which reads as black once uploaded as a texture', () => {
+        render(<DrawingCanvas onSave={vi.fn()} />)
+        expect(fakeContext.fillRect).toHaveBeenCalledWith(0, 0, 256, 256)
+        expect(fakeContext.fillStyle).toBe('#ffffff')
     })
 
     it('restores a previously saved page from initialImageUrl without marking it dirty', () => {

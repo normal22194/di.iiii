@@ -25,6 +25,18 @@ export default function DrawingCanvas({ initialImageUrl, onSave, onClear, busy }
 
     const getContext = useCallback(() => canvasRef.current?.getContext('2d') || null, [])
 
+    // The canvas must always be fully opaque, never transparent — the 3D
+    // material this gets uploaded as a texture onto isn't alpha-blended
+    // (see permanence.js's clearPage/saveShapeTexture comments), so any
+    // pixel left transparent reads as solid black on the mesh instead of
+    // showing through. Filling white first (instead of clearRect, which
+    // leaves fully transparent pixels) means even a single drawn dot
+    // exports as a true white-background PNG, not a black-background one.
+    const fillWhite = useCallback((ctx) => {
+        ctx.fillStyle = '#ffffff'
+        ctx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE)
+    }, [])
+
     // A save already in flight (busy) blocks a *new* one from firing when
     // the debounce timer lands — read via ref since the timeout callback
     // runs outside React's render cycle and would otherwise close over a
@@ -57,14 +69,14 @@ export default function DrawingCanvas({ initialImageUrl, onSave, onClear, busy }
     useEffect(() => {
         const ctx = getContext()
         if (!ctx) return
-        ctx.clearRect(0, 0, CANVAS_SIZE, CANVAS_SIZE)
+        fillWhite(ctx)
         setDirty(false)
         if (!initialImageUrl) return
         const img = new Image()
         img.crossOrigin = 'anonymous'
         img.onload = () => ctx.drawImage(img, 0, 0, CANVAS_SIZE, CANVAS_SIZE)
         img.src = initialImageUrl
-    }, [initialImageUrl, getContext])
+    }, [initialImageUrl, getContext, fillWhite])
 
     const pointFromEvent = (e) => {
         const rect = canvasRef.current.getBoundingClientRect()
@@ -123,7 +135,7 @@ export default function DrawingCanvas({ initialImageUrl, onSave, onClear, busy }
             clearTimeout(autoSaveTimerRef.current)
             autoSaveTimerRef.current = null
         }
-        ctx.clearRect(0, 0, CANVAS_SIZE, CANVAS_SIZE)
+        fillWhite(ctx)
         setDirty(false)
         onClear()
     }

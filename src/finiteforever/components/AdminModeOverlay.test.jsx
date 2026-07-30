@@ -57,4 +57,19 @@ describe('AdminModeOverlay', () => {
         render(<AdminModeOverlay selectedEntities={[{ id: 'mark-1', name: 'Box mark' }]} busy />)
         expect(screen.getByRole('button', { name: 'Make all permanent' })).toBeDisabled()
     })
+
+    it('shows a "Leave" button only when something is selected, and calls onLeave', () => {
+        const onLeave = vi.fn()
+        const { rerender } = render(<AdminModeOverlay selectedEntities={[]} onLeave={onLeave} />)
+        expect(screen.queryByRole('button', { name: 'Leave' })).not.toBeInTheDocument()
+
+        rerender(<AdminModeOverlay selectedEntities={[{ id: 'mark-1', name: 'Box mark' }]} onLeave={onLeave} />)
+        fireEvent.click(screen.getByRole('button', { name: 'Leave' }))
+        expect(onLeave).toHaveBeenCalledTimes(1)
+    })
+
+    it('disables the "Leave" button while busy', () => {
+        render(<AdminModeOverlay selectedEntities={[{ id: 'mark-1', name: 'Box mark' }]} busy />)
+        expect(screen.getByRole('button', { name: 'Leave' })).toBeDisabled()
+    })
 })

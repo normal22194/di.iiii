@@ -22,6 +22,7 @@ import {
     formatRemainingDrift,
     getRemainingDriftMs,
     isMarkOwner,
+    leaveMarksForever,
     listPermanentMarks,
     moveMark,
     placeMark,
@@ -33,8 +34,13 @@ import {
     rescaleMark,
     rotateMark,
     savePage,
+    saveShapeTexture,
+    clearShapeTexture,
+    TEXTURABLE_SHAPE_TYPES,
+    setMarkGeometry,
     setMarkOpacity,
     setMarkText,
+    setMarkTextStyle,
     uploadMarkAsset,
     uploadPageAsset
 } from './permanence.js'
@@ -353,6 +359,22 @@ describe('single-field updates', () => {
         ])
     })
 
+    it('setMarkGeometry patches the primitive component with whatever fields are given', async () => {
+        submitProjectOps.mockResolvedValue({ document: {}, newVersion: 2 })
+        await setMarkGeometry({ baseVersion: 1, entityId: 'mark-1', patch: { radius: 0.8, height: 1.6 } })
+        expect(submitProjectOps).toHaveBeenCalledWith(FINITE_FOREVER_PROJECT_ID, 1, [
+            { type: 'updateComponent', payload: { entityId: 'mark-1', component: 'primitive', patch: { radius: 0.8, height: 1.6 } } }
+        ])
+    })
+
+    it('setMarkTextStyle patches the text component with font/size/depth/bevel fields, distinct from setMarkText\'s value patch', async () => {
+        submitProjectOps.mockResolvedValue({ document: {}, newVersion: 2 })
+        await setMarkTextStyle({ baseVersion: 1, entityId: 'mark-1', patch: { font3D: 'optimer_regular', bevelEnabled3D: false } })
+        expect(submitProjectOps).toHaveBeenCalledWith(FINITE_FOREVER_PROJECT_ID, 1, [
+            { type: 'updateComponent', payload: { entityId: 'mark-1', component: 'text', patch: { font3D: 'optimer_regular', bevelEnabled3D: false } } }
+        ])
+    })
+
     it('renameMark patches the entity\'s top-level name via updateEntity, not updateComponent', async () => {
         submitProjectOps.mockResolvedValue({ document: {}, newVersion: 2 })
         await renameMark({ baseVersion: 1, entityId: 'mark-1', name: 'My favorite box' })
@@ -392,7 +414,32 @@ describe('pages', () => {
                         ]
                     }
                 }
-            }
+            },
+            { type: 'updateComponent', payload: { entityId: 'mark-1', component: 'appearance', patch: { color: '#ffffff' } } }
+        ])
+    })
+
+    it('TEXTURABLE_SHAPE_TYPES covers exactly sphere/cone/torus — not box (has Pages), text/image/model (no shared single-texture path)', () => {
+        expect(TEXTURABLE_SHAPE_TYPES).toEqual(['sphere', 'cone', 'torus'])
+    })
+
+    it('saveShapeTexture registers the asset and patches appearance.textureAssetId, the single-surface equivalent of savePage', async () => {
+        submitProjectOps.mockResolvedValue({ document: {}, newVersion: 2 })
+        const asset = { id: 'asset-9', name: 'surface-mark-1.png' }
+        await saveShapeTexture({ baseVersion: 1, entityId: 'mark-1', asset })
+
+        expect(submitProjectOps).toHaveBeenCalledWith(FINITE_FOREVER_PROJECT_ID, 1, [
+            { type: 'upsertAsset', payload: { asset } },
+            { type: 'updateComponent', payload: { entityId: 'mark-1', component: 'appearance', patch: { textureAssetId: 'asset-9', color: '#ffffff' } } }
+        ])
+    })
+
+    it('clearShapeTexture reverts to the plain flat color (textureAssetId: null) with no asset upload', async () => {
+        submitProjectOps.mockResolvedValue({ document: {}, newVersion: 2 })
+        await clearShapeTexture({ baseVersion: 1, entityId: 'mark-1' })
+
+        expect(submitProjectOps).toHaveBeenCalledWith(FINITE_FOREVER_PROJECT_ID, 1, [
+            { type: 'updateComponent', payload: { entityId: 'mark-1', component: 'appearance', patch: { textureAssetId: null } } }
         ])
     })
 
@@ -652,6 +699,68 @@ describe('claimMarksForever (admin bulk override)', () => {
         const document = { workspaceState: { permanencePool: { total: 5, claimed: 1 } }, entities: [already] }
 
         const result = await claimMarksForever({ document, baseVersion: 5, entities: [already], actorLabel: 'admin' })
+
+        expect(result).toEqual({ document, newVersion: 5 })
+        expect(submitProjectOps).not.toHaveBeenCalled()
+        expect(apiFetch).not.toHaveBeenCalled()
+    })
+})
+
+describe('leaveMarksForever (admin bulk "Leave" — never drifts, but never touches the pool)', () => {
+    it('leaves every non-left selected mark without touching permanencePool at all', async () => {
+        submitProjectOps.mockResolvedValue({ document: {}, newVersion: 12 })
+        apiFetch.mockResolvedValue({ ok: true })
+        const a = makeEntity({ id: 'a', components: { permanence: { status: 'drifting' } } })
+        const b = makeEntity({ id: 'b', components: { permanence: { status: 'drifting' } } })
+        const document = { workspaceState: { permanencePool: { total: 1, claimed: 1 } }, entities: [a, b] }
+
+        const result = await leaveMarksForever({ document, baseVersion: 5, entities: [a, b], actorLabel: 'admin', actorVisible: true })
+
+        expect(result).toEqual({ document: {}, newVersion: 12 })
+        const [, , ops] = submitProjectOps.mock.calls[0]
+        // No setWorkspaceState/permanencePool op at all — unlike claimMarksForever,
+        // this never claims a pool slot for a drifting mark.
+        expect(ops).toHaveLength(2)
+        expect(ops[0]).toMatchObject({ type: 'updateComponent', payload: { entityId: 'a', component: 'permanence', patch: { status: 'left', claimedBy: 'admin' } } })
+        expect(ops[1]).toMatchObject({ type: 'updateComponent', payload: { entityId: 'b', component: 'permanence', patch: { status: 'left', claimedBy: 'admin' } } })
+        expect(apiFetch).toHaveBeenCalledWith(`/api/spaces/${FINITE_FOREVER_SPACE_ID}/ritual-log`, expect.objectContaining({
+            body: expect.objectContaining({ action: 'leave', targetLabel: '2 marks', detail: { count: 2, bulk: true } })
+        }))
+    })
+
+    it('converting an already-permanent mark to left frees its pool slot', async () => {
+        submitProjectOps.mockResolvedValue({ document: {}, newVersion: 12 })
+        apiFetch.mockResolvedValue({ ok: true })
+        const permanent = makeEntity({ id: 'permanent', components: { permanence: { status: 'permanent', claimedAt: 1 } } })
+        const document = { workspaceState: { permanencePool: { total: 3, claimed: 2 } }, entities: [permanent] }
+
+        await leaveMarksForever({ document, baseVersion: 5, entities: [permanent], actorLabel: 'admin' })
+
+        const [, , ops] = submitProjectOps.mock.calls[0]
+        expect(ops).toHaveLength(2)
+        expect(ops[0].payload.patch.status).toBe('left')
+        expect(ops[1]).toEqual({ type: 'setWorkspaceState', payload: { patch: { permanencePool: { total: 3, claimed: 1 } } } })
+    })
+
+    it('skips marks already left and only acts on the rest', async () => {
+        submitProjectOps.mockResolvedValue({ document: {}, newVersion: 12 })
+        apiFetch.mockResolvedValue({ ok: true })
+        const alreadyLeft = makeEntity({ id: 'already', components: { permanence: { status: 'left', claimedAt: 1 } } })
+        const drifting = makeEntity({ id: 'drifting', components: { permanence: { status: 'drifting' } } })
+        const document = { workspaceState: { permanencePool: { total: 5, claimed: 1 } }, entities: [alreadyLeft, drifting] }
+
+        await leaveMarksForever({ document, baseVersion: 5, entities: [alreadyLeft, drifting], actorLabel: 'admin' })
+
+        const [, , ops] = submitProjectOps.mock.calls[0]
+        expect(ops).toHaveLength(1)
+        expect(ops[0].payload.entityId).toBe('drifting')
+    })
+
+    it('is a no-op (no network call) when everything selected is already left', async () => {
+        const alreadyLeft = makeEntity({ id: 'already', components: { permanence: { status: 'left', claimedAt: 1 } } })
+        const document = { workspaceState: { permanencePool: { total: 5, claimed: 1 } }, entities: [alreadyLeft] }
+
+        const result = await leaveMarksForever({ document, baseVersion: 5, entities: [alreadyLeft], actorLabel: 'admin' })
 
         expect(result).toEqual({ document, newVersion: 5 })
         expect(submitProjectOps).not.toHaveBeenCalled()

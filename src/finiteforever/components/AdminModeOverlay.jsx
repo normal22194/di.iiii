@@ -3,7 +3,7 @@
 // whole mode on/off with Ctrl+Shift+A (or exit with Escape), the same way
 // Studio's own Navigate/Edit mode works — this is a mode, not a panel you
 // manage separately from it.
-export default function AdminModeOverlay({ selectedEntities = [], onMakePermanent, busy = false }) {
+export default function AdminModeOverlay({ selectedEntities = [], onMakePermanent, onLeave, busy = false }) {
     return (
         <div className="ff-admin-mode">
             <span className="ff-admin-mode__badge">Admin mode</span>
@@ -21,7 +21,8 @@ export default function AdminModeOverlay({ selectedEntities = [], onMakePermanen
                     </ul>
                     {/* Admin override, not the normal ritual claim: no pool cap, no
                         choosing what to release, and nothing here drifts once
-                        permanent — see claimMarksForever in permanence.js. */}
+                        permanent — see claimMarksForever in permanence.js. This
+                        one *does* count against the shared "kept forever" pool. */}
                     <button
                         type="button"
                         className="ff-button ff-button--ghost ff-admin-mode__make-permanent"
@@ -29,6 +30,18 @@ export default function AdminModeOverlay({ selectedEntities = [], onMakePermanen
                         onClick={onMakePermanent}
                     >
                         Make all permanent
+                    </button>
+                    {/* The honest "uncapped" option — also never drifts, but
+                        deliberately does NOT touch the shared pool at all (see
+                        leaveMarksForever), so it doesn't inflate "kept forever"
+                        with marks nobody in the pool actually chose to keep. */}
+                    <button
+                        type="button"
+                        className="ff-button ff-button--ghost ff-admin-mode__leave"
+                        disabled={busy}
+                        onClick={onLeave}
+                    >
+                        Leave
                     </button>
                     <p className="ff-admin-mode__note">Backspace deletes all of these at once.</p>
                 </>

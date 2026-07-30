@@ -44,6 +44,12 @@ export default function ClaimPrompt({
     const permanence = entity.components?.permanence || {}
     const status = permanence.status || 'drifting'
     const isPermanent = status === 'permanent'
+    // Admin's "Leave" (see leaveMarksForever) — never drifts, same as
+    // permanent, but deliberately a separate status: it never occupied a
+    // pool slot, so it gets its own distinct message instead of claiming
+    // "kept forever" alongside marks the community actually spent
+    // permanence on.
+    const isLeft = status === 'left'
     const remaining = Math.max(0, pool.total - pool.claimed)
     const willTake = remaining <= 0
     const remainingDriftMs = getRemainingDriftMs(permanence, now)
@@ -88,6 +94,15 @@ export default function ClaimPrompt({
                         {claimedByLabel
                             ? `${claimedByLabel} chose to keep this. It won't drift.`
                             : "Someone chose to keep this. It won't drift."}
+                    </p>
+                </>
+            ) : isLeft ? (
+                <>
+                    <p className="ff-claim-prompt__question">Left here</p>
+                    <p className="ff-claim-prompt__detail">
+                        {claimedByLabel
+                            ? `${claimedByLabel} left this here. It won't drift, but it doesn't count against permanence.`
+                            : "An admin left this here. It won't drift, but it doesn't count against permanence."}
                     </p>
                 </>
             ) : (
@@ -179,7 +194,7 @@ export default function ClaimPrompt({
                 />
             </CollapsibleSection>
 
-            {!isPermanent && willTake && choosingRevoke && (() => {
+            {!isPermanent && !isLeft && willTake && choosingRevoke && (() => {
                 const confirmingTarget = confirmingRevokeId
                     ? permanentMarks.find((mark) => mark.id === confirmingRevokeId)
                     : null
@@ -247,7 +262,7 @@ export default function ClaimPrompt({
             })()}
 
             <div className="ff-claim-prompt__actions">
-                {!isPermanent && !choosingRevoke && (
+                {!isPermanent && !isLeft && !choosingRevoke && (
                     <button
                         type="button"
                         className="ff-button ff-button--primary ff-claim-prompt__claim-button"
@@ -263,7 +278,7 @@ export default function ClaimPrompt({
                     </button>
                 )}
                 <button type="button" className="ff-button ff-button--ghost" disabled={busy} onClick={onDismiss}>
-                    {isPermanent ? 'Close' : 'Let it drift'}
+                    {(isPermanent || isLeft) ? 'Close' : 'Let it drift'}
                 </button>
             </div>
 

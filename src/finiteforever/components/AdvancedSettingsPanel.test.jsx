@@ -6,6 +6,14 @@ vi.mock('./PagesPanel.jsx', () => ({
     default: ({ isOwner }) => <div>pages-panel isOwner={String(isOwner)}</div>
 }))
 
+vi.mock('./ShapeControls.jsx', () => ({
+    default: ({ entity, isOwner }) => <div>shape-controls type={entity.type} isOwner={String(isOwner)}</div>
+}))
+
+vi.mock('./ShapeTexturePanel.jsx', () => ({
+    default: ({ entity, isOwner }) => <div>shape-texture-panel type={entity.type} isOwner={String(isOwner)}</div>
+}))
+
 function makeEntity(permanenceOverrides = {}) {
     return {
         id: 'mark-1',
@@ -81,5 +89,26 @@ describe('AdvancedSettingsPanel', () => {
     it('admins always count as the owner, regardless of actorLabel', () => {
         render(<AdvancedSettingsPanel entity={makeEntity()} actorLabel="someone else" isAdmin onClose={vi.fn()} onRename={vi.fn()} />)
         expect(screen.getByText('pages-panel isOwner=true')).toBeInTheDocument()
+    })
+
+    it('renders ShapeControls for the current entity, passing the same owner check as Pages', () => {
+        const sphereEntity = { ...makeEntity(), type: 'sphere' }
+        render(<AdvancedSettingsPanel entity={sphereEntity} actorLabel="nooo" onClose={vi.fn()} onRename={vi.fn()} />)
+        expect(screen.getByText('shape-controls type=sphere isOwner=true')).toBeInTheDocument()
+    })
+
+    it('renders ShapeTexturePanel for sphere/cone/torus', () => {
+        render(<AdvancedSettingsPanel entity={{ ...makeEntity(), type: 'sphere' }} actorLabel="nooo" onClose={vi.fn()} onRename={vi.fn()} />)
+        expect(screen.getByText('shape-texture-panel type=sphere isOwner=true')).toBeInTheDocument()
+    })
+
+    it('does not render ShapeTexturePanel for box (which has Pages instead)', () => {
+        render(<AdvancedSettingsPanel entity={makeEntity()} actorLabel="nooo" onClose={vi.fn()} onRename={vi.fn()} />)
+        expect(screen.queryByText(/shape-texture-panel/)).not.toBeInTheDocument()
+    })
+
+    it('does not render ShapeTexturePanel for text (Text3DObject has no texture-map input)', () => {
+        render(<AdvancedSettingsPanel entity={{ ...makeEntity(), type: 'text' }} actorLabel="nooo" onClose={vi.fn()} onRename={vi.fn()} />)
+        expect(screen.queryByText(/shape-texture-panel/)).not.toBeInTheDocument()
     })
 })
