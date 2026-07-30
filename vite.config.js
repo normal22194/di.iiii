@@ -116,6 +116,21 @@ export default {
     server:
     {
         host: true, // Open to local network and display URL
+        // `host: true` only controls which network interfaces Vite *binds*
+        // to — it does not by itself allow requests arriving with a
+        // non-local Host header. Vite's DNS-rebinding protection blocks
+        // those separately (shows its own "Blocked request" page instead of
+        // the app) unless explicitly allowed here. Covers two dev-only
+        // public tunnel providers used to reach this dev server from a
+        // device a local network can't (e.g. a phone hotspot that isolates
+        // connected clients from each other): localtunnel (`.loca.lt`,
+        // needs a per-visitor click-through warning page, not great for
+        // showing to many people) and Cloudflare's quick tunnels
+        // (`.trycloudflare.com`, no interstitial at all — preferred for
+        // that case). Each restart gets a new random subdomain unless a
+        // fixed one is requested, hence matching the whole domain (leading
+        // dot) rather than any one specific subdomain.
+        allowedHosts: ['.loca.lt', '.trycloudflare.com'],
         // Headless by default (`npm run dev`). DEV_BROWSER=1 hands browser-opening to
         // dev-stack.mjs (a wiped Chromium profile) instead; VITE_OPEN_SPACE/VITE_OPEN_PATH
         // opt in to Vite's own auto-open for a plain `npm run dev`.

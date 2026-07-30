@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 // Static, written explanation of the space — unlike RitualLogView, there's
 // nothing to fetch here, it's just prose. Placeholder copy below; edit
@@ -10,8 +10,36 @@ const CONCEPT_PARAGRAPHS = [
     'Every placement, every choice to keep or let go, is recorded in the ritual log. The space forgets nothing, even as almost everything in it disappears.'
 ]
 
+// How long the closing fade plays before this actually unmounts — must
+// match finiteForeverExperience.css's .ff-concept opacity transition
+// duration, kept in sync manually (same approach already used elsewhere for
+// touch height ratios, see DraggablePanel.jsx).
+const FADE_DURATION_MS = 300
+
+// Kept mounted a little past `open` going false so the CSS opacity
+// transition below actually has time to play — a plain conditional render
+// would unmount instantly, before any fade could be seen. Used both for a
+// manual close (Close button/click-outside) and for FiniteForeverExperience
+// auto-closing this a few seconds after entry.
 export default function ConceptView({ open, onClose }) {
     const panelRef = useRef(null)
+    const [rendered, setRendered] = useState(open)
+    const [closing, setClosing] = useState(false)
+
+    useEffect(() => {
+        if (open) {
+            setRendered(true)
+            setClosing(false)
+            return undefined
+        }
+        if (!rendered) return undefined
+        setClosing(true)
+        const timer = setTimeout(() => {
+            setRendered(false)
+            setClosing(false)
+        }, FADE_DURATION_MS)
+        return () => clearTimeout(timer)
+    }, [open, rendered])
 
     // Same pointerdown-outside-closes idiom as RitualLogView/DraggablePanel.
     useEffect(() => {
@@ -23,10 +51,15 @@ export default function ConceptView({ open, onClose }) {
         return () => document.removeEventListener('pointerdown', handlePointerDown)
     }, [open, onClose])
 
-    if (!open) return null
+    if (!rendered) return null
 
     return (
-        <div ref={panelRef} className="ff-concept" role="dialog" aria-label="The concept">
+        <div
+            ref={panelRef}
+            className={`ff-concept${closing ? ' ff-concept--closing' : ''}`}
+            role="dialog"
+            aria-label="The concept"
+        >
             <header className="ff-concept__header">
                 <span>The concept</span>
                 <button type="button" className="ff-button ff-button--ghost" onClick={onClose}>Close</button>

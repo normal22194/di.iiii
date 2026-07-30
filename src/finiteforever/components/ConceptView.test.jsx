@@ -1,5 +1,5 @@
-import { fireEvent, render, screen } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { act, fireEvent, render, screen } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ConceptView from './ConceptView.jsx'
 
 describe('ConceptView', () => {
@@ -33,5 +33,36 @@ describe('ConceptView', () => {
         render(<ConceptView open onClose={onClose} />)
         fireEvent.click(screen.getByRole('button', { name: 'Close' }))
         expect(onClose).toHaveBeenCalledTimes(1)
+    })
+
+    describe('closing fade', () => {
+        beforeEach(() => { vi.useFakeTimers() })
+        afterEach(() => { vi.useRealTimers() })
+
+        it('stays mounted with a closing class for a brief fade after `open` goes false, instead of unmounting instantly', () => {
+            const { rerender, container } = render(<ConceptView open onClose={vi.fn()} />)
+            rerender(<ConceptView open={false} onClose={vi.fn()} />)
+
+            expect(screen.getByText('The concept')).toBeInTheDocument()
+            expect(container.querySelector('.ff-concept--closing')).not.toBeNull()
+        })
+
+        it('actually unmounts once the fade duration elapses', () => {
+            const { rerender } = render(<ConceptView open onClose={vi.fn()} />)
+            rerender(<ConceptView open={false} onClose={vi.fn()} />)
+
+            act(() => { vi.advanceTimersByTime(300) })
+            expect(screen.queryByText('The concept')).not.toBeInTheDocument()
+        })
+
+        it('reopening mid-fade cancels the pending unmount and drops the closing class', () => {
+            const { rerender, container } = render(<ConceptView open onClose={vi.fn()} />)
+            rerender(<ConceptView open={false} onClose={vi.fn()} />)
+            rerender(<ConceptView open onClose={vi.fn()} />)
+
+            expect(container.querySelector('.ff-concept--closing')).toBeNull()
+            act(() => { vi.advanceTimersByTime(300) })
+            expect(screen.getByText('The concept')).toBeInTheDocument()
+        })
     })
 })

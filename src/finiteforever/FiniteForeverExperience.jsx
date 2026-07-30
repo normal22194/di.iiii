@@ -50,6 +50,14 @@ const LiveProjectScene = lazy(() => import('../components/LiveProjectScene.jsx')
 const MARK_SPAWN_DISTANCE = 2.5
 const MAX_UNDO_STEPS = 50
 
+// A brief unrequested intro to the concept panel right after entering a
+// name — long enough to register as "there's something here", short enough
+// not to block getting into the space. Followed by a highlight pulse on
+// "The concept" button itself, so someone who glanced away mid-fade still
+// gets pointed at where to reopen it.
+const CONCEPT_INTRO_DURATION_MS = 4000
+const CONCEPT_HIGHLIGHT_DURATION_MS = 5000
+
 export default function FiniteForeverExperience() {
     const { role } = useAuthSession()
     const isAdmin = role === 'admin'
@@ -78,9 +86,26 @@ export default function FiniteForeverExperience() {
     const canEditEntity = useCallback((target) => (
         isMarkOwner({ permanence: target?.components?.permanence, actorLabel, isAdmin })
     ), [actorLabel, isAdmin])
+    // Briefly auto-shows the concept panel right after entry (see
+    // CONCEPT_INTRO_DURATION_MS), then fades it out (ConceptView's own
+    // closing-fade handles that part) and pulses "The concept" button for a
+    // few seconds afterward — a nudge toward where it lives, in case
+    // whoever just entered didn't read it in time. Runs regardless of how
+    // (or whether) the panel gets dismissed early; see the button's own
+    // onClick for the one way this sequence gets cut short.
     const handleEnter = useCallback((next) => {
         storeIdentity(next)
         setIdentity(next)
+        conceptIntroTimersRef.current.forEach(clearTimeout)
+        setConceptOpen(true)
+        setConceptHighlight(false)
+        const closeTimer = setTimeout(() => setConceptOpen(false), CONCEPT_INTRO_DURATION_MS)
+        const highlightOnTimer = setTimeout(() => setConceptHighlight(true), CONCEPT_INTRO_DURATION_MS)
+        const highlightOffTimer = setTimeout(
+            () => setConceptHighlight(false),
+            CONCEPT_INTRO_DURATION_MS + CONCEPT_HIGHLIGHT_DURATION_MS
+        )
+        conceptIntroTimersRef.current = [closeTimer, highlightOnTimer, highlightOffTimer]
     }, [])
     // Deliberate override, not a side effect of a new tab/reload — this device
     // otherwise always resumes as the same identity (see identity.js).
@@ -173,6 +198,14 @@ export default function FiniteForeverExperience() {
     const [error, setError] = useState(null)
     const [logOpen, setLogOpen] = useState(false)
     const [conceptOpen, setConceptOpen] = useState(false)
+    const [conceptHighlight, setConceptHighlight] = useState(false)
+    // Holds the intro sequence's 3 timers (auto-close, highlight-on,
+    // highlight-off) so they can be cleared if this unmounts mid-sequence —
+    // same reasoning as every other timer ref in this file.
+    const conceptIntroTimersRef = useRef([])
+    useEffect(() => () => {
+        conceptIntroTimersRef.current.forEach(clearTimeout)
+    }, [])
     const [importOpen, setImportOpen] = useState(false)
     const [importError, setImportError] = useState(null)
     // First-arrival framing: states the concept once, then gets out of the
@@ -1358,7 +1391,14 @@ export default function FiniteForeverExperience() {
                     </div>
                 </div>
                 <div className="ff-overlay__actions">
-                    <button type="button" className="ff-button ff-button--ghost" onClick={() => setConceptOpen(true)}>
+                    <button
+                        type="button"
+                        className={`ff-button ff-button--ghost${conceptHighlight ? ' ff-button--highlight' : ''}`}
+                        onClick={() => {
+                            setConceptOpen(true)
+                            setConceptHighlight(false)
+                        }}
+                    >
                         The concept
                     </button>
                     <button type="button" className="ff-button ff-button--ghost" onClick={() => setLogOpen(true)}>
