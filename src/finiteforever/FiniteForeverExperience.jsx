@@ -55,7 +55,7 @@ const MAX_UNDO_STEPS = 50
 // not to block getting into the space. Followed by a highlight pulse on
 // "The concept" button itself, so someone who glanced away mid-fade still
 // gets pointed at where to reopen it.
-const CONCEPT_INTRO_DURATION_MS = 4000
+const CONCEPT_INTRO_DURATION_MS = 3000
 const CONCEPT_HIGHLIGHT_DURATION_MS = 5000
 
 export default function FiniteForeverExperience() {

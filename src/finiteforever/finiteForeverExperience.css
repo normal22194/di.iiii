@@ -667,7 +667,8 @@
     transition: opacity 300ms ease;
 }
 
-.ff-concept--closing {
+.ff-concept--closing,
+.ff-concept--entering {
     opacity: 0;
 }
 

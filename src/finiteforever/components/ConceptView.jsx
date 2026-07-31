@@ -16,24 +16,37 @@ const CONCEPT_PARAGRAPHS = [
 // touch height ratios, see DraggablePanel.jsx).
 const FADE_DURATION_MS = 300
 
+// How long the panel stays at opacity 0 right after mounting before the
+// entering class is dropped — needs to be >0 so the browser actually paints
+// the opacity:0 frame before the CSS transition kicks in animating up to 1;
+// a same-tick flip wouldn't leave anything for the transition to animate
+// from. Well under FADE_DURATION_MS so the fade-in reads as prompt.
+const ENTER_DELAY_MS = 20
+
 // Kept mounted a little past `open` going false so the CSS opacity
 // transition below actually has time to play — a plain conditional render
 // would unmount instantly, before any fade could be seen. Used both for a
 // manual close (Close button/click-outside) and for FiniteForeverExperience
-// auto-closing this a few seconds after entry.
+// auto-closing this a few seconds after entry. Opening mirrors this the same
+// way: mounts at opacity 0 (`entering`) and fades up, rather than appearing
+// instantly.
 export default function ConceptView({ open, onClose }) {
     const panelRef = useRef(null)
     const [rendered, setRendered] = useState(open)
     const [closing, setClosing] = useState(false)
+    const [entering, setEntering] = useState(open)
 
     useEffect(() => {
         if (open) {
             setRendered(true)
             setClosing(false)
-            return undefined
+            setEntering(true)
+            const enterTimer = setTimeout(() => setEntering(false), ENTER_DELAY_MS)
+            return () => clearTimeout(enterTimer)
         }
         if (!rendered) return undefined
         setClosing(true)
+        setEntering(false)
         const timer = setTimeout(() => {
             setRendered(false)
             setClosing(false)
@@ -56,7 +69,7 @@ export default function ConceptView({ open, onClose }) {
     return (
         <div
             ref={panelRef}
-            className={`ff-concept${closing ? ' ff-concept--closing' : ''}`}
+            className={`ff-concept${closing ? ' ff-concept--closing' : ''}${entering ? ' ff-concept--entering' : ''}`}
             role="dialog"
             aria-label="The concept"
         >

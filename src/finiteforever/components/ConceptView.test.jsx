@@ -35,6 +35,32 @@ describe('ConceptView', () => {
         expect(onClose).toHaveBeenCalledTimes(1)
     })
 
+    describe('opening fade', () => {
+        beforeEach(() => { vi.useFakeTimers() })
+        afterEach(() => { vi.useRealTimers() })
+
+        it('mounts with an entering class so it starts transparent instead of appearing instantly', () => {
+            const { container } = render(<ConceptView open onClose={vi.fn()} />)
+            expect(container.querySelector('.ff-concept--entering')).not.toBeNull()
+        })
+
+        it('drops the entering class shortly after mounting, letting the fade-in play', () => {
+            const { container } = render(<ConceptView open onClose={vi.fn()} />)
+            act(() => { vi.advanceTimersByTime(20) })
+            expect(container.querySelector('.ff-concept--entering')).toBeNull()
+        })
+
+        it('reopening after a close fades back in from transparent again', () => {
+            const { container, rerender } = render(<ConceptView open onClose={vi.fn()} />)
+            act(() => { vi.advanceTimersByTime(20) })
+            rerender(<ConceptView open={false} onClose={vi.fn()} />)
+            act(() => { vi.advanceTimersByTime(300) })
+            rerender(<ConceptView open onClose={vi.fn()} />)
+
+            expect(container.querySelector('.ff-concept--entering')).not.toBeNull()
+        })
+    })
+
     describe('closing fade', () => {
         beforeEach(() => { vi.useFakeTimers() })
         afterEach(() => { vi.useRealTimers() })
